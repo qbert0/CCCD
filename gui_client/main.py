@@ -4,6 +4,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from pages.dashboard import DashboardPage
 from pages.image_controller import ImageProcessingPage
 from pages.contact import ContactPage
+from pages.ImageQR import ImagePageView
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -29,10 +30,12 @@ class MainWindow(QMainWindow):
         self.btn_dashboard = self.create_nav_button("Dashboard")
         self.btn_image = self.create_nav_button("Xử lý Ảnh")
         self.btn_contact = self.create_nav_button("Hướng dẫn")
+        self.btn_QR = self.create_nav_button("QR")
 
         menu_layout.addWidget(self.btn_dashboard)
         menu_layout.addWidget(self.btn_image)
         menu_layout.addWidget(self.btn_contact)
+        menu_layout.addWidget(self.btn_QR)
         menu_layout.addStretch()
         self.menu_frame.setLayout(menu_layout)
 
@@ -43,10 +46,12 @@ class MainWindow(QMainWindow):
         self.page_1 = DashboardPage()
         self.page_2 = ImageProcessingPage()
         self.page_3 = ContactPage()
+        self.page_4 = ImagePageView()
 
         self.content_stack.addWidget(self.page_1) # Index 0
         self.content_stack.addWidget(self.page_2) # Index 1
         self.content_stack.addWidget(self.page_3) # Index 2
+        self.content_stack.addWidget(self.page_4) # Index 3
 
         # Ghép 2 phần vào layout chính
         main_layout.addWidget(self.menu_frame)
@@ -56,6 +61,7 @@ class MainWindow(QMainWindow):
         self.btn_dashboard.clicked.connect(lambda: self.switch_page(0, self.btn_dashboard))
         self.btn_image.clicked.connect(lambda: self.switch_page(1, self.btn_image))
         self.btn_contact.clicked.connect(lambda: self.switch_page(2, self.btn_contact))
+        self.btn_QR.clicked.connect(lambda: self.switch_page(3, self.btn_QR))
 
         # Mặc định chọn trang 1
         self.switch_page(0, self.btn_dashboard)
@@ -78,6 +84,7 @@ class MainWindow(QMainWindow):
         self.btn_dashboard.setChecked(False)
         self.btn_image.setChecked(False)
         self.btn_contact.setChecked(False)
+        self.btn_QR.setChecked(False)
         button_sender.setChecked(True)
 
 if __name__ == "__main__":
