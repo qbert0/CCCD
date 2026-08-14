@@ -1,0 +1,19 @@
+.venv-ocr/
+.venv-desktop/
+.uv-cache/
+.pyinstaller/
+build/
+product/
+dist_installers/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+local.env
+paddle_models/
+desktop_app/data/output/*
+!desktop_app/data/output/.gitkeep
+
+# Real customer scans/filled contracts kept as local dev reference only —
+# never push real people's ID photos or personal data to this public repo.
+desktop_app/data/source/original_documents/

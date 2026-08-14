@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=CCCD Report
+GenericName=Đọc CCCD và tạo tài liệu
+Comment=Đọc thông tin CCCD, kiểm tra và tạo tài liệu theo mẫu
+Exec=/run/media/qbert/1C8099B8809998BA/codedao/CCCD/product/CCCDReport/CCCDReport
+Icon=/run/media/qbert/1C8099B8809998BA/codedao/CCCD/desktop_app/assets/icon.svg
+Terminal=false
+Categories=Office;
+StartupNotify=true
