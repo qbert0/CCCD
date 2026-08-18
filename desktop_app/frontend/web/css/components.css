@@ -163,6 +163,223 @@ textarea.field__control { resize: vertical; min-height: 76px; font-family: var(-
 .form-grid__cell--span-1 { grid-column: span 1; }
 .form-grid__cell--span-2 { grid-column: span 2; }
 .form-grid__cell--span-3 { grid-column: span 3; }
+/* Auto-flow packs a short row's leftover columns with whatever comes next
+   in DOM order -- .form-grid flattens every Python-computed row into one
+   flat sibling list (a <template v-for> has no wrapping element), so a row
+   that doesn't fill all 3 columns (e.g. the entity-type selector alone)
+   would otherwise get the next row's fields pulled up beside it. Forcing
+   the first cell of each row back to column 1 restores the row boundary
+   Python already decided. */
+.form-grid__cell--row-start { grid-column-start: 1; }
+
+/* ===== Reusable personal / organization information forms ===== */
+.information-form {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+.information-form__row {
+  display: grid;
+  gap: var(--space-base);
+}
+.information-form--personal .information-form__row {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.information-form--organization .information-form__row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.information-form--subscriber .information-form__row {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.information-form__cell {
+  min-width: 0;
+}
+.information-form__row > .information-form__cell:only-child {
+  grid-column: 1 / -1;
+}
+.information-form--subscriber .information-form__cell--span-1 { grid-column: span 1; }
+.information-form--subscriber .information-form__cell--span-2 { grid-column: span 2; }
+.information-form--subscriber .information-form__cell--span-3 { grid-column: 1 / -1; }
+.information-form--subscriber .information-form__row > .information-form__cell--span-1:only-child {
+  grid-column: span 1;
+}
+
+/* ===== Provider blocks ===== */
+.sectioned-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-base);
+}
+.sectioned-form__section {
+  padding: var(--space-base);
+  background: var(--color-canvas-soft);
+  border: 1px solid var(--color-hairline-soft);
+  border-radius: var(--radius-lg);
+}
+.sectioned-form__heading {
+  margin-bottom: var(--space-sm);
+}
+.sectioned-form__title {
+  color: var(--color-ink);
+  font-size: 14px;
+  font-weight: 650;
+}
+.sectioned-form__description {
+  margin-top: 2px;
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+/* ===== Subscriber table (Beautiful Number's repeating row) ===== */
+.subscriber-table {
+  overflow: hidden;
+  background: var(--color-surface-card);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-lg);
+}
+.subscriber-table__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-base);
+  padding: var(--space-sm) var(--space-base);
+  border-bottom: 1px solid var(--color-hairline-soft);
+}
+.subscriber-table__title {
+  color: var(--color-ink);
+  font-size: 14px;
+  font-weight: 650;
+}
+.subscriber-table__hint {
+  margin-top: 2px;
+  color: var(--color-muted);
+  font-size: 11px;
+}
+.subscriber-table__scroll {
+  overflow-x: auto;
+}
+.subscriber-table__grid {
+  width: 100%;
+  min-width: 760px;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+.subscriber-table__grid th, .subscriber-table__grid td {
+  padding: var(--space-xs);
+  text-align: left;
+  vertical-align: middle;
+}
+.subscriber-table__grid th {
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--color-canvas-soft);
+  border-bottom: 1px solid var(--color-hairline);
+}
+.subscriber-table__grid td {
+  border-bottom: 1px solid var(--color-hairline-soft);
+}
+.subscriber-table__grid tbody tr:last-child td {
+  border-bottom: 0;
+}
+.subscriber-table__grid tbody tr:hover {
+  background: var(--color-canvas-soft);
+}
+.subscriber-table__col-index { width: 48px; }
+.subscriber-table__col-actions { width: 68px; }
+.subscriber-table__grid th:nth-child(2) { width: 20%; }
+.subscriber-table__grid th:nth-child(3) { width: 18%; }
+.subscriber-table__grid th:nth-child(4) { width: 24%; }
+.subscriber-table__index {
+  text-align: center !important;
+}
+.subscriber-table__index span {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  color: var(--color-body);
+  font-size: 12px;
+  font-weight: 650;
+  background: var(--color-hairline-soft);
+  border-radius: var(--radius-pill);
+}
+.subscriber-table__input-wrap {
+  display: flex;
+  align-items: center;
+  min-height: 38px;
+  overflow: hidden;
+  background: var(--color-surface-card);
+  border: 1px solid var(--color-hairline-strong);
+  border-radius: var(--radius-md);
+}
+.subscriber-table__input-wrap:focus-within {
+  border: 2px solid var(--color-body);
+}
+.subscriber-table__input-wrap[data-invalid="true"] {
+  border-color: var(--color-error);
+}
+.prepaid-sim-table__grid {
+  min-width: 680px;
+}
+.prepaid-sim-table__grid th:nth-child(2) { width: 24%; }
+.prepaid-sim-table__grid th:nth-child(3) { width: 34%; }
+.prepaid-sim-table__grid th:nth-child(4) { width: 24%; }
+.subscriber-table__input {
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-xs) 10px;
+  color: var(--color-ink);
+  font: inherit;
+  background: transparent;
+  border: 0;
+  outline: 0;
+}
+.subscriber-table__input::placeholder {
+  color: var(--color-muted-soft);
+}
+.subscriber-table__suffix {
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  color: var(--color-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  background: var(--color-canvas-soft);
+  border-left: 1px solid var(--color-hairline);
+}
+.subscriber-table__actions {
+  text-align: center !important;
+}
+.subscriber-table__remove {
+  padding: var(--space-xxs) var(--space-xs);
+  color: var(--color-error);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.subscriber-table__remove:hover {
+  background: var(--color-error-tint);
+}
+.subscriber-table__add {
+  flex: 0 0 auto;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 
 /* ===== Accordion (UI-element/Accordion.md) ===== */
 .disclosure__trigger {
@@ -210,9 +427,12 @@ textarea.field__control { resize: vertical; min-height: 76px; font-family: var(-
 .tablist {
   display: flex;
   gap: 4px;
+  overflow-x: auto;
   border-bottom: 1px solid var(--color-hairline-soft);
 }
 .tab {
+  flex: 0 0 auto;
+  white-space: nowrap;
   background: var(--color-canvas);
   color: var(--color-muted);
   border: 1px solid var(--color-hairline);
@@ -375,7 +595,7 @@ select.field__control {
 /* ===== Calendar popover ===== */
 .calendar-popover {
   position: fixed;
-  z-index: 50;
+  z-index: 1000;
   background: var(--color-surface-card);
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-lg);
@@ -420,6 +640,7 @@ select.field__control {
 
 /* ===== Dialog / modal ===== */
 dialog.modal {
+  overflow: visible;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-lg);
   padding: 0;

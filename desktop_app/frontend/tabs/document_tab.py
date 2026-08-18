@@ -88,9 +88,9 @@ COMMON_FIELDS = [
 COMMON_VISIBLE_BY_TYPE = {
     DocumentType.TRANSFER: {"document_date"},
     DocumentType.BEAUTIFUL_NUMBER: {"document_date"},
-    DocumentType.AFTERSALE: {
-        "document_date", "shop_name", "shop_address", "shop_phone", "shop_phone_2", "shop_phone_3", "staff_name",
-    },
+    # Aftersale's date is automatic and its requested UI fields live in the
+    # document form; company/customer identities have their own tabs.
+    DocumentType.AFTERSALE: set(),
     DocumentType.PREPAID_CONTRACT: {
         "document_date", "shop_address", "shop_phone", "shop_phone_2", "shop_phone_3", "staff_name",
     },
@@ -168,7 +168,9 @@ class DocumentTab(QWidget):
 
         place_rows(self.common_grid, _widgets(resolve_common_rows(document_type)["rows"]))
         # Transfer's form has no free-text notes concept in its own template.
-        self.notes.setVisible(document_type != DocumentType.TRANSFER)
+        self.notes.setVisible(document_type not in {
+            DocumentType.TRANSFER, DocumentType.AFTERSALE, DocumentType.BEAUTIFUL_NUMBER,
+        })
 
     def active_form(self) -> QWidget:
         return self.stack.currentWidget()

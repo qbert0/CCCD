@@ -10,12 +10,18 @@ class AftersaleDocumentModule(BaseDocumentModule):
     suffix = ".docx"
     schema = AftersaleSchema
     placeholders = frozenset({
-        "aftersale_document_date_line", "shop_name", "shop_address", "shop_phone", "customer_name",
-        "customer_id_number", "customer_issue_date", "customer_issue_place", "customer_address",
-        "customer_phone", "attachment_checkboxes", "other_attachment_line",
-        "update_information_choice", "update_information_commitment", "replace_sim_choice",
-        "replace_sim_commitment", "transfer_choice", "aftersale_transfer_commitment",
-        "aftersale_common_commitment", "backup_phone_commitment", "staff_name",
+        "aftersale_day", "aftersale_month", "aftersale_year",
+        "aftersale_shop_address", "aftersale_shop_phone",
+        "aftersale_customer_name", "aftersale_customer_id_number",
+        "aftersale_customer_issue_date", "aftersale_customer_issue_place",
+        "aftersale_customer_address", "aftersale_customer_phone",
+        "id_attachment_mark", "sim_attachment_mark", "other_attachment_mark",
+        "other_attachment_value", "update_information_mark", "update_subscriber_number",
+        "replace_sim_mark", "replace_sim_subscriber_number", "transfer_mark",
+        "transfer_subscriber_number", "transfer_new_owner_name", "transfer_new_owner_id_number",
+        "transfer_new_owner_issue_date", "transfer_new_owner_issue_place",
+        "requester_role_mark", "new_owner_role_mark", "common_subscriber_number",
+        "backup_phone_1_line", "backup_phone_2_line",
     })
     template = resource_path(
         "desktop_app", "backend", "documents", "aftersale", "00_MAU_CAM_KET_SAU_BAN_HANG.docx"

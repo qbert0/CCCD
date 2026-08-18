@@ -99,6 +99,11 @@ DOCUMENT_FIELD_META: dict[str, FieldMeta] = {
     "staff_name": FieldMeta(FieldSource.OPERATOR, FieldTier.PRIMARY, FieldWidth.SHORT),
     "provider_representative": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
     "provider_position": FieldMeta(FieldSource.DOCUMENT, FieldTier.DETAIL, FieldWidth.SHORT),
+    "provider_phone": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
+    "provider_email": FieldMeta(FieldSource.DOCUMENT, FieldTier.DETAIL, FieldWidth.SHORT),
+    "provider_unit_address": FieldMeta(FieldSource.SHOP, FieldTier.PRIMARY, FieldWidth.MEDIUM),
+    "service_point_address": FieldMeta(FieldSource.OPERATOR, FieldTier.PRIMARY, FieldWidth.LONG),
+    "service_point_phone": FieldMeta(FieldSource.OPERATOR, FieldTier.PRIMARY, FieldWidth.SHORT),
     "sim_serial": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
     "activation_date": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
     "contract_number": FieldMeta(FieldSource.DOCUMENT, FieldTier.DETAIL, FieldWidth.SHORT),
@@ -107,7 +112,16 @@ DOCUMENT_FIELD_META: dict[str, FieldMeta] = {
     "registration_time": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
     "commitment_months": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
     "monthly_fee": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
-    "commitment_note": FieldMeta(FieldSource.DOCUMENT, FieldTier.DETAIL, FieldWidth.LONG),
+    # No more "Thông tin chi tiết" section for Beautiful Number -- its own
+    # fields now live entirely inside the subscriber-number table (see
+    # web_bridge/schema.py's resolve_document_form_layout()), so commitment_note
+    # moved from DETAIL to PRIMARY alongside its row-mates.
+    "commitment_note": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.LONG),
+    "subscriber_number_1": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
+    "subscriber_number_2": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
+    "commitment_months_2": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
+    "monthly_fee_2": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
+    "commitment_note_2": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.LONG),
     "service_action": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
     "payment_method": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
     "source_contract_number": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
@@ -117,9 +131,16 @@ DOCUMENT_FIELD_META: dict[str, FieldMeta] = {
     "transfer_effective_date": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
     "has_id_attachment": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
     "has_original_sim": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
-    "other_attachment": FieldMeta(FieldSource.DOCUMENT, FieldTier.DETAIL, FieldWidth.LONG),
+    # No more "Thông tin chi tiết" disclosure for Aftersale either -- its
+    # identity block (shop_id_number/issue_date/issue_place, below) and these
+    # 2 fields all now live directly in resolve_aftersale_form_rows()'s fixed
+    # row order.
+    "other_attachment": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.LONG),
     "backup_phone_1": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
-    "backup_phone_2": FieldMeta(FieldSource.DOCUMENT, FieldTier.DETAIL, FieldWidth.SHORT),
+    "backup_phone_2": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
+    "shop_id_number": FieldMeta(FieldSource.SHOP, FieldTier.PRIMARY, FieldWidth.SHORT),
+    "shop_issue_date": FieldMeta(FieldSource.SHOP, FieldTier.PRIMARY, FieldWidth.SHORT),
+    "shop_issue_place": FieldMeta(FieldSource.SHOP, FieldTier.PRIMARY, FieldWidth.SHORT),
     "notes": FieldMeta(FieldSource.DOCUMENT, FieldTier.DETAIL, FieldWidth.LONG),
 }
 

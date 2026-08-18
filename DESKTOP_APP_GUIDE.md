@@ -236,12 +236,16 @@ Mỗi ảnh cũng mang theo vị trí người dùng đã chọn (`MẶT TRƯỚ
 
 1. `qr.py`: ZXing-C++ rồi OpenCV, đọc QR mặt trước.
 2. `chandra.py`: Chandra OCR 2 thông qua API khi có `CCCD_OCR_API_URL`.
-3. `paddle.py`: PaddleOCR tiếng Việt chạy offline; xử lý cả mặt trước và chữ/MRZ mặt sau.
+3. `paddle.py`: tự xoay đúng chiều cả khung ảnh (0/90/180/270°, xem `PaddleEngine._correct_orientation`) rồi dò khung chữ bằng PaddleOCR (det+cls, không phụ thuộc ngôn ngữ), nhưng bước *đọc ký tự* dùng VietOCR thay vì bộ nhận dạng "vi" gốc của PaddleOCR — bộ đó thực chất dùng chung dictionary "latin" (185 ký tự, cho tiếng Pháp/Đức/Ba Lan...), không có ơ/ư và không có nguyên âm mang dấu thanh nào, nên trước đây gần như không đọc được tiếng Việt có dấu (xem `PaddleEngine`/`_VietOCRLineRecognizer` trong `paddle.py`). PaddleOCR vẫn lo việc dò khung + cắt dòng + chỉnh góc; VietOCR chỉ nhận input là ảnh dòng chữ đã cắt sẵn.
 4. `tesseract.py`: fallback cuối, tự dùng `vie+eng` nếu máy có gói tiếng Việt.
 
-Thứ tự mặc định là `qr,chandra,paddle,tesseract`. Có thể đổi bằng `CCCD_OCR_ENGINE_ORDER`; model Paddle bằng `CCCD_PADDLE_MODEL_DIR`; ngưỡng nhận dạng bằng `CCCD_PADDLE_CONFIDENCE`. Giao diện hiển thị các engine thực sự sẵn sàng trên máy.
+Thứ tự mặc định là `qr,chandra,paddle,tesseract`. Có thể đổi bằng `CCCD_OCR_ENGINE_ORDER`; model Paddle bằng `CCCD_PADDLE_MODEL_DIR`; ngưỡng nhận dạng bằng `CCCD_PADDLE_CONFIDENCE`; trọng số/cấu hình VietOCR bằng `CCCD_VIETOCR_WEIGHTS`/`CCCD_VIETOCR_CONFIG` (mặc định `runtime_models/vietocr/`). Giao diện hiển thị các engine thực sự sẵn sàng trên máy. Trọng số VietOCR (~150MB) vượt giới hạn 100MB của một blob Git nên không commit trực tiếp như model Paddle — `install.sh`/`build.sh` tự tải về `runtime_models/vietocr/vgg_transformer.pth` trong lần cài đầu tiên (xem `.gitignore`).
 
-Mặt sau không chỉ được đọc bằng ZXing/OpenCV. PaddleOCR đọc chữ tiếng Việt, parser đọc ba dòng MRZ, và bộ hậu xử lý phục hồi các nhãn ổn định như “Ngày, tháng, năm”, “Đặc điểm nhận dạng”, “Ngón trỏ trái/phải”. MRZ vốn theo chuẩn ASCII nên tên trong riêng ba dòng MRZ không có dấu; dữ liệu họ tên có dấu vẫn lấy từ QR mặt trước.
+Mặt sau không chỉ được đọc bằng ZXing/OpenCV. PaddleOCR dò khung + VietOCR đọc chữ tiếng Việt, parser đọc ba dòng MRZ, và bộ hậu xử lý phục hồi các nhãn ổn định như “Ngày, tháng, năm”, “Đặc điểm nhận dạng”, “Ngón trỏ trái/phải”. MRZ vốn theo chuẩn ASCII nên tên trong riêng ba dòng MRZ không có dấu; dữ liệu họ tên có dấu vẫn lấy từ QR mặt trước.
+
+VietOCR chạy tuần tự trên CPU (~0.5-1s mỗi dòng chữ) nên một ảnh nhiều dòng (mặt trước CCCD ~20 dòng) tốn khoảng 15-25s thay vì 1-5s như bộ nhận dạng PaddleOCR gốc — đánh đổi tốc độ lấy độ chính xác tiếng Việt.
+
+Trước khi có `_correct_orientation`, một ảnh chụp lệch ~90° (điện thoại không cầm ngang) vẫn qua được `normalize_card()` (hàm này chỉ chỉnh phối cảnh + kiểm tra thô ngang/dọc) mà không được xoay đúng chiều — PaddleOCR's `cls` khi đó chỉ chỉnh được *từng dòng chữ* cho dễ đọc, còn *thứ tự* các dòng (sắp theo toạ độ điểm ảnh gốc, xảy ra trước cls) thì vẫn sai, khiến parser thấy giá trị đứng trước nhãn hoặc có dòng đọc ngược hẳn — không liên quan gì đến watermark như một ghi chú cũ ở đây từng nói nhầm. `_correct_orientation` xoay lại cả khung ảnh trước khi OCR nên vấn đề này đã được xử lý ở gốc.
 
 ### `backend/ocr/parser.py`
 
@@ -261,25 +265,13 @@ Chuyển QR hoặc văn bản OCR thành các trường chuẩn:
 
 ### Placeholder trong mẫu Word
 
-Ba mẫu Word trong `documents/transfer/`, `documents/aftersale/` và `documents/prepaid_contract/` dùng token có dạng
-`{{ customer_name }}`, `{{ customer_id_number }}` và `{{ subscriber_number }}`. Có thể mở file
-DOCX bằng Word hoặc LibreOffice để sửa bố cục, font, cỡ chữ, căn lề và nội dung cố định. Không đổi
-tên hoặc xóa token nếu trường đó vẫn cần xuất hiện trong tài liệu.
+Ba mẫu Word trong `documents/transfer/`, `documents/aftersale/` và `documents/prepaid_contract/` dùng token có dạng `{{ customer_name }}`, `{{ customer_id_number }}` và `{{ subscriber_number }}`. Có thể mở file DOCX bằng Word hoặc LibreOffice để sửa bố cục, font, cỡ chữ, căn lề và nội dung cố định. Không đổi tên hoặc xóa token nếu trường đó vẫn cần xuất hiện trong tài liệu.
 
-Riêng biên bản chuyển quyền, file thiết kế người dùng chỉnh sửa là
-`documents/transfer/Biên bản chuyển chủ quyền 2025.docx`. Hàm `migrate_transfer()` trong
-`scripts/migrate_docx_placeholders.py` chỉ đổi tên token theo ngữ nghĩa rồi xuất thành
-`documents/transfer/00_MAU_BIEN_BAN_CHUYEN_CHU_QUYEN.docx`; không dựng lại hoặc thay bố cục thiết kế.
+Riêng biên bản chuyển quyền, file thiết kế người dùng chỉnh sửa là `documents/transfer/Biên bản chuyển chủ quyền 2025.docx`. Hàm `migrate_transfer()` trong `scripts/migrate_docx_placeholders.py` chỉ đổi tên token theo ngữ nghĩa rồi xuất thành `documents/transfer/00_MAU_BIEN_BAN_CHUYEN_CHU_QUYEN.docx`; không dựng lại hoặc thay bố cục thiết kế.
 
-Renderer chỉ thay phần token ngay trong `run` chứa nó nên không còn thay tên giả, số CCCD giả hay
-viết lại toàn bộ đoạn văn như cơ chế cũ. Nếu Word tự chia một token thành nhiều `run`, renderer vẫn
-ghép và nhận diện được. Token sai tên hoặc chưa được fill sẽ làm quá trình tạo tài liệu báo lỗi thay
-vì âm thầm xuất ra một tài liệu thiếu dữ liệu.
+Renderer chỉ thay phần token ngay trong `run` chứa nó nên không còn thay tên giả, số CCCD giả hay viết lại toàn bộ đoạn văn như cơ chế cũ. Nếu Word tự chia một token thành nhiều `run`, renderer vẫn ghép và nhận diện được. Token sai tên hoặc chưa được fill sẽ làm quá trình tạo tài liệu báo lỗi thay vì âm thầm xuất ra một tài liệu thiếu dữ liệu.
 
-Mỗi module DOCX khai báo danh sách placeholder bắt buộc ngay trong `module.py`. Trước khi tạo file,
-ứng dụng đối chiếu danh sách này với token thực tế trong mẫu. Vì vậy, nếu sửa mẫu Word và vô tình xóa
-hoặc viết sai một token, ứng dụng báo rõ token thiếu/sai thay vì tạo tài liệu nhìn có vẻ hoàn chỉnh
-nhưng mất trường dữ liệu.
+Mỗi module DOCX khai báo danh sách placeholder bắt buộc ngay trong `module.py`. Trước khi tạo file, ứng dụng đối chiếu danh sách này với token thực tế trong mẫu. Vì vậy, nếu sửa mẫu Word và vô tình xóa hoặc viết sai một token, ứng dụng báo rõ token thiếu/sai thay vì tạo tài liệu nhìn có vẻ hoàn chỉnh nhưng mất trường dữ liệu.
 
 Định dạng đầu ra đã được kiểm tra với dữ liệu đầy đủ:
 
@@ -287,8 +279,7 @@ nhưng mất trường dữ liệu.
 - `aftersale`: 1 trang A4; chỉ nội dung của dịch vụ được chọn nhận dữ liệu, ba cột chữ ký được giữ nguyên.
 - `prepaid_contract`: 2 trang; tự điền đúng khu vực cá nhân hoặc tổ chức và bảng thuê bao/SIM/hòa mạng.
 
-Mẫu `beautiful_number/*.pdf` là PDF nền, không phải Word và không có trường form. Nó tiếp tục được
-fill bằng lớp chữ theo tọa độ trong `renderer.py`; thay bố cục PDF có thể yêu cầu cập nhật lại tọa độ.
+Mẫu `beautiful_number/*.pdf` là PDF nền, không phải Word và không có trường form. Nó tiếp tục được fill bằng lớp chữ theo tọa độ trong `renderer.py`; thay bố cục PDF có thể yêu cầu cập nhật lại tọa độ.
 
 Bốn module tài liệu:
 
@@ -420,15 +411,15 @@ Cài hoặc cập nhật launcher trong menu ứng dụng:
 
 ## 8. Quy trình sử dụng
 
-1. Chọn hoặc kéo một ảnh vào vùng **Thả một ảnh CCCD vào đây**; không cần chọn trước đó là mặt nào.
-2. Ứng dụng tự nhận biết và đưa ảnh vào khung xem **Mặt trước** hoặc **Mặt sau**. Lặp lại để nạp mặt còn lại.
-3. Chọn một trong bốn mẫu tài liệu. Ảnh và dữ liệu OCR vẫn được giữ khi đổi mẫu.
-4. Riêng mẫu **Chuyển quyền & thanh lý hợp đồng**, vùng ảnh chính là CCCD của **Bên C / chủ thuê bao mới**. Bên A được tự điền từ hồ sơ cục bộ nên mẫu này không hiện vùng tải ảnh thứ hai.
-5. Nhấn **Thông tin mặc định Bên A** trên thanh đầu trang để cập nhật hồ sơ doanh nghiệp dùng chung. Dữ liệu được lưu trên máy và tự áp dụng cho mọi hồ sơ chuyển quyền sau đó.
-6. Bổ sung các ô có dấu `*` của riêng tài liệu đang chọn.
-7. Nhấn **Kiểm tra thông tin**, **Xem trước** hoặc **Tạo tài liệu**.
-8. Sửa các ô có thông báo màu đỏ ngay bên dưới, nếu có.
-9. Xác nhận thông tin tại cửa sổ kiểm tra cuối.
+ 1. Chọn hoặc kéo một ảnh vào vùng **Thả một ảnh CCCD vào đây**; không cần chọn trước đó là mặt nào.
+ 2. Ứng dụng tự nhận biết và đưa ảnh vào khung xem **Mặt trước** hoặc **Mặt sau**. Lặp lại để nạp mặt còn lại.
+ 3. Chọn một trong bốn mẫu tài liệu. Ảnh và dữ liệu OCR vẫn được giữ khi đổi mẫu.
+ 4. Riêng mẫu **Chuyển quyền & thanh lý hợp đồng**, vùng ảnh chính là CCCD của **Bên C / chủ thuê bao mới**. Bên A được tự điền từ hồ sơ cục bộ nên mẫu này không hiện vùng tải ảnh thứ hai.
+ 5. Nhấn **Thông tin mặc định Bên A** trên thanh đầu trang để cập nhật hồ sơ doanh nghiệp dùng chung. Dữ liệu được lưu trên máy và tự áp dụng cho mọi hồ sơ chuyển quyền sau đó.
+ 6. Bổ sung các ô có dấu `*` của riêng tài liệu đang chọn.
+ 7. Nhấn **Kiểm tra thông tin**, **Xem trước** hoặc **Tạo tài liệu**.
+ 8. Sửa các ô có thông báo màu đỏ ngay bên dưới, nếu có.
+ 9. Xác nhận thông tin tại cửa sổ kiểm tra cuối.
 10. Lưu DOCX/PDF, đổi sang mẫu khác để tạo tiếp nếu cần, rồi chọn **Mở để in**.
 
 ### Hồ sơ mặc định Bên A của biên bản chuyển quyền

@@ -18,7 +18,9 @@ CCCD.bridgeReady = new Promise((resolve) => {
 
     CCCD.bridge = {
       getInitialState: () => call("get_initial_state"),
+      getNewDocumentState: (documentType) => call("get_new_document_state", documentType),
       onDocumentTypeChanged: (requestObj) => call("on_document_type_changed", JSON.stringify(requestObj)),
+      applyProfileDefaults: (documentType) => call("apply_profile_defaults", documentType),
       onEntityTypeChanged: (form, entityType) => call("on_entity_type_changed", form, entityType),
       selectAndScanImages: (target) => raw.select_and_scan_images(target),
       submitDroppedImage: (target, filename, base64Data) => raw.submit_dropped_image(target, filename, base64Data),
@@ -29,6 +31,9 @@ CCCD.bridgeReady = new Promise((resolve) => {
       getCompanyProfile: () => call("get_company_profile"),
       getCompanyProfileLayout: () => call("get_company_profile_layout"),
       saveCompanyProfile: (personObj) => call("save_company_profile", JSON.stringify(personObj)),
+      getRepresentativeProfile: () => call("get_representative_profile"),
+      getRepresentativeProfileLayout: () => call("get_representative_profile_layout"),
+      saveRepresentativeProfile: (personObj) => call("save_representative_profile", JSON.stringify(personObj)),
       newCase: (stateObj) => call("new_case", JSON.stringify(stateObj)),
 
       onOcrProgress: (fn) => raw.ocrProgress.connect(fn),

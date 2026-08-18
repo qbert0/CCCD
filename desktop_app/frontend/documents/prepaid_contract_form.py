@@ -6,14 +6,17 @@ from .base import BaseDocumentForm
 # service_point_name (MEDIUM, 2 cols) exactly fills the rest of row 2 -- 2
 # rows total instead of 3.
 FIELDS = [
+    # Retained for the legacy QWidget form.  The web UI edits these values in
+    # its dedicated repeating five-row SIM tab instead.
     ("Số sê-ri SIM", "sim_serial", True, "number"),
     ("Ngày hòa mạng", "activation_date", True, "date"),
-    ("Thời gian đăng ký thông tin thuê bao", "registration_time", True, "text"),
-    ("Người đại diện bên cung cấp", "provider_representative", False, "text"),
+    ("Địa chỉ đơn vị cung cấp", "provider_unit_address", True, "text"),
+    ("Người đại diện", "provider_representative", True, "text"),
     ("Điểm cung cấp dịch vụ viễn thông", "service_point_name", True, "text"),
-    ("Số hợp đồng", "contract_number", False, "number"),
-    ("Mã thuê bao", "subscriber_code", False, "number"),
-    ("Chức vụ người đại diện", "provider_position", False, "text"),
+    ("Nhân viên giao dịch", "staff_name", True, "text"),
+    ("Địa điểm giao dịch", "service_point_address", True, "text"),
+    ("Số điện thoại", "service_point_phone", True, "number"),
+    ("Thời gian thực hiện", "registration_time", True, "text"),
 ]
 
 

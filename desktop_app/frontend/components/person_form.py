@@ -34,6 +34,7 @@ PERSON_FIELDS = [
     ("Nơi cấp/Đơn vị cấp", "issue_place", "text"),
     ("Ngày hết hạn", "expiry_date", "date"),
     ("Điện thoại liên hệ", "phone", "number"),
+    ("Điện thoại liên hệ 2", "phone_2", "number"),
     ("Email", "email", "text"),
     ("Liên hệ khác", "other_contact", "text"),
     ("Quốc gia cấp hộ chiếu", "foreign_country", "text"),
@@ -42,7 +43,7 @@ PERSON_FIELDS = [
     ("Số ĐKKD/QĐTL/GPĐT", "business_registration_number", "number"),
     ("Nơi cấp giấy ĐKKD/QĐTL/GPĐT", "business_registration_issue_place", "text"),
     ("Ngày cấp giấy ĐKKD/QĐTL/GPĐT", "business_registration_issue_date", "date"),
-    ("Người đại diện/ủy quyền", "representative_name", "text"),
+    ("Họ tên người đại diện", "representative_name", "text"),
     ("Chức vụ", "representative_position", "text"),
     ("Số giấy ủy quyền", "authorization_number", "number"),
     ("Ngày giấy ủy quyền", "authorization_date", "date"),
@@ -95,51 +96,160 @@ PERSONAL_ONLY_FIELDS = {"full_name"}
 ENTITY_TYPE_ITEM = "entity_type"
 
 
-def _resolve_transfer_person_form(effective_entity_type: str) -> dict:
-    """Transfer's Tổ chức/Thuê bao tabs get a bespoke, always-fully-visible
-    layout -- no "Thông tin chi tiết" disclosure at all, and both tabs use
-    the exact same row structure regardless of which one is which, so a
-    Thuê bao who's also a Tổ chức gets exactly the same fields Tổ chức
-    already shows. Fixed by explicit user request, not derived from the
-    shared PERSON_FIELDS-driven pack order every other document type uses.
+PERSON_INFORMATION_ITEMS: list[tuple[object, FieldWidth]] = [
+    ("full_name", FieldWidth.SHORT), ("id_number", FieldWidth.SHORT), ("issue_date", FieldWidth.SHORT),
+    (ROW_BREAK, FieldWidth.SHORT),
+    ("issue_place", FieldWidth.SHORT), ("date_of_birth", FieldWidth.SHORT), ("nationality", FieldWidth.SHORT),
+    (ROW_BREAK, FieldWidth.SHORT),
+    ("address", FieldWidth.LONG),
+]
+PERSON_INFORMATION_REQUIRED = {
+    "full_name", "id_number", "issue_date", "issue_place", "date_of_birth", "nationality", "address",
+}
 
-    Rows: 1) Loại khách hàng alone; 1.1) Trụ sở chính (org only); 1.2) Số
-    ĐKKD, Người đại diện, Giấy ủy quyền (org only, all optional); 2) Họ và
-    tên/Tên tổ chức, CCCD, Ngày cấp; 3) Nơi cấp, Ngày sinh, Quốc tịch;
-    4) Địa chỉ.
-    """
+ORGANIZATION_INFORMATION_ITEMS: list[tuple[object, FieldWidth]] = [
+    ("organization_name", FieldWidth.MEDIUM), ("business_registration_number", FieldWidth.SHORT),
+    (ROW_BREAK, FieldWidth.SHORT),
+    ("business_registration_issue_date", FieldWidth.SHORT),
+    ("business_registration_issue_place", FieldWidth.MEDIUM),
+    (ROW_BREAK, FieldWidth.SHORT),
+    ("phone", FieldWidth.SHORT), ("phone_2", FieldWidth.SHORT),
+    (ROW_BREAK, FieldWidth.SHORT),
+    ("headquarters_address", FieldWidth.LONG),
+]
+ORGANIZATION_INFORMATION_REQUIRED = {
+    "organization_name", "business_registration_number", "business_registration_issue_date",
+    "business_registration_issue_place", "headquarters_address",
+}
+
+
+def resolve_person_information_form() -> dict:
+    """The reusable 7-field, 3-row CCCD-backed personal form."""
+    return {
+        "visible": set(PERSON_INFORMATION_REQUIRED),
+        "required": {name: True for name in PERSON_INFORMATION_REQUIRED},
+        "primary_rows": resolve_rows(PERSON_INFORMATION_ITEMS),
+    }
+
+
+def resolve_organization_information_form() -> dict:
+    """The reusable 7-field, 4-row company/organization form."""
+    visible_names = {
+        name for name, _width in ORGANIZATION_INFORMATION_ITEMS if name is not ROW_BREAK
+    }
+    return {
+        "visible": visible_names,
+        "required": {name: name in ORGANIZATION_INFORMATION_REQUIRED for name in visible_names},
+        "primary_rows": resolve_rows(ORGANIZATION_INFORMATION_ITEMS),
+    }
+
+
+def _resolve_transfer_person_form(role: str, effective_entity_type: str) -> dict:
+    """Both transfer parties share the same Cá nhân/Tổ chức switchable form."""
     organization = effective_entity_type == "Tổ chức"
-    name_field = "organization_name" if organization else "full_name"
-
-    items: list[tuple[object, FieldWidth]] = [(ENTITY_TYPE_ITEM, FieldWidth.SHORT), (ROW_BREAK, FieldWidth.SHORT)]
     if organization:
-        items += [
-            ("headquarters_address", FieldWidth.LONG), (ROW_BREAK, FieldWidth.SHORT),
-            ("business_registration_number", FieldWidth.SHORT),
-            ("representative_name", FieldWidth.SHORT),
-            ("authorization_number", FieldWidth.SHORT),
+        items: list[tuple[object, FieldWidth]] = [
+            (ENTITY_TYPE_ITEM, FieldWidth.SHORT), ("organization_name", FieldWidth.MEDIUM),
             (ROW_BREAK, FieldWidth.SHORT),
+            ("headquarters_address", FieldWidth.MEDIUM),
+            ("business_registration_number", FieldWidth.SHORT),
+            (ROW_BREAK, FieldWidth.SHORT),
+            *PERSON_INFORMATION_ITEMS,
         ]
-    items += [
-        (name_field, FieldWidth.SHORT), ("id_number", FieldWidth.SHORT), ("issue_date", FieldWidth.SHORT),
-        (ROW_BREAK, FieldWidth.SHORT),
-        ("issue_place", FieldWidth.SHORT), ("date_of_birth", FieldWidth.SHORT), ("nationality", FieldWidth.SHORT),
-        (ROW_BREAK, FieldWidth.SHORT),
-        ("address", FieldWidth.LONG),
-    ]
+    else:
+        items = [
+            (ENTITY_TYPE_ITEM, FieldWidth.SHORT), (ROW_BREAK, FieldWidth.SHORT),
+            *PERSON_INFORMATION_ITEMS,
+        ]
 
-    visible_names = {name for name, _width in items if name is not ROW_BREAK and name is not ENTITY_TYPE_ITEM}
-    # Rows 1.1/1.2 (headquarters/business number/representative/authorization)
-    # are optional even for an organization -- only the name field and the
-    # always-shown identity rows (2/3/4) are required, by explicit request.
-    required_names = {name_field, "id_number", "issue_date", "issue_place", "date_of_birth", "address", "nationality"}
-    required_map = {name: name in required_names for name in visible_names}
-
+    visible_names = {
+        name for name, _width in items
+        if name is not ROW_BREAK and name is not ENTITY_TYPE_ITEM
+    }
+    required_names = set(PERSON_INFORMATION_REQUIRED)
+    if organization:
+        required_names |= {
+            "organization_name", "headquarters_address", "business_registration_number",
+        }
     return {
         "allow_entity": True,
         "effective_entity_type": effective_entity_type,
         "visible": visible_names,
-        "required": required_map,
+        "required": {name: name in required_names for name in visible_names},
+        "primary_rows": resolve_rows(items),
+        "detail_rows": [],
+        "has_detail": False,
+    }
+
+
+def _resolve_aftersale_person_form(role: str) -> dict:
+    """Aftersale mirrors Transfer's first two roles: the saved organization
+    first, followed by a deliberately short customer identity form."""
+    if role == "customer":
+        return {
+            "allow_entity": False,
+            "effective_entity_type": "Tổ chức",
+            **resolve_organization_information_form(),
+            "detail_rows": [],
+            "has_detail": False,
+        }
+
+    items: list[tuple[object, FieldWidth]] = [
+        ("full_name", FieldWidth.MEDIUM), ("id_number", FieldWidth.SHORT),
+        (ROW_BREAK, FieldWidth.SHORT),
+        ("issue_date", FieldWidth.SHORT), ("issue_place", FieldWidth.SHORT),
+    ]
+    visible_names = {"full_name", "id_number", "issue_date", "issue_place"}
+    return {
+        "allow_entity": False,
+        "effective_entity_type": "Cá nhân",
+        "visible": visible_names,
+        "required": {name: True for name in visible_names},
+        "primary_rows": resolve_rows(items),
+        "detail_rows": [],
+        "has_detail": False,
+    }
+
+
+def _resolve_prepaid_person_form(role: str) -> dict:
+    """Five-tab prepaid flow: saved company, saved representative and the
+    scanned customer are intentionally three independent records."""
+    if role == "customer":
+        return {
+            "allow_entity": False,
+            "effective_entity_type": "Tổ chức",
+            **resolve_organization_information_form(),
+            "detail_rows": [],
+            "has_detail": False,
+        }
+
+    items: list[tuple[object, FieldWidth]] = [*PERSON_INFORMATION_ITEMS]
+    if role == "representative":
+        items.extend([
+            (ROW_BREAK, FieldWidth.SHORT),
+            ("representative_position", FieldWidth.SHORT),
+            ("phone", FieldWidth.SHORT),
+            ("email", FieldWidth.SHORT),
+            (ROW_BREAK, FieldWidth.SHORT),
+            ("other_contact", FieldWidth.LONG),
+        ])
+    else:
+        items.extend([
+            (ROW_BREAK, FieldWidth.SHORT),
+            ("phone", FieldWidth.SHORT), ("email", FieldWidth.SHORT),
+            ("other_contact", FieldWidth.SHORT),
+        ])
+    visible_names = {
+        name for name, _width in items if name is not ROW_BREAK
+    }
+    required_names = set(PERSON_INFORMATION_REQUIRED) | {"phone"}
+    if role == "representative":
+        required_names.add("representative_position")
+    return {
+        "allow_entity": False,
+        "effective_entity_type": "Cá nhân",
+        "visible": visible_names,
+        "required": {name: name in required_names for name in visible_names},
         "primary_rows": resolve_rows(items),
         "detail_rows": [],
         "has_detail": False,
@@ -162,18 +272,25 @@ def resolve_person_form(document_type: DocumentType, role: str, entity_type: str
     effective_entity_type = entity_type if allow_entity else "Cá nhân"
 
     if document_type == DocumentType.TRANSFER:
-        return _resolve_transfer_person_form(effective_entity_type)
+        return _resolve_transfer_person_form(role, effective_entity_type)
+
+    if document_type == DocumentType.AFTERSALE:
+        return _resolve_aftersale_person_form(role)
+
+    if document_type == DocumentType.PREPAID_CONTRACT and role.startswith("prepaid_"):
+        prepaid_role = {
+            "prepaid_company": "customer",
+            "prepaid_representative": "representative",
+            "prepaid_customer": "new_owner",
+        }[role]
+        return _resolve_prepaid_person_form(prepaid_role)
 
     if document_type == DocumentType.BEAUTIFUL_NUMBER:
         base_visible = {"full_name", "id_number"}
         base_required = set(base_visible)
-    elif document_type == DocumentType.AFTERSALE:
-        if role == "new_owner":
-            base_visible = {"full_name", "id_number", "issue_date", "issue_place"}
-        else:
-            base_visible = {"full_name", "id_number", "issue_date", "issue_place", "address", "phone"}
-        base_required = set(base_visible)
     elif document_type == DocumentType.PREPAID_CONTRACT:
+        # Legacy QWidget flow keeps its historical customer/entity selector.
+        # The new five-tab web flow uses the explicit prepaid_* roles above.
         base_visible = {
             "full_name", "id_number", "issue_date", "issue_place", "date_of_birth",
             "address", "phone", "email", "other_contact", "nationality", "foreign_country",

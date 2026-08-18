@@ -10,6 +10,20 @@
         reviewSummary: "",
         profile: null, // PersonData dict while the company-profile dialog is open
         profileLayout: null,
+        representative: null, // PersonData dict for the "Người đại diện" sub-tab session record
+        representativeLayout: null,
+        profileTab: "company", // "company" | "representative" sub-tab inside the dialog
+        // Each document type owns a session-local editable copy. Saved
+        // company/representative profiles are copied in only when the draft
+        // is first created or the user explicitly presses the update button.
+        documentDrafts: {},
+        // Identity and subscriber number belong to the current customer
+        // case, not to one document draft. Organization-first documents
+        // render that person under `new_owner`; other documents use
+        // `customer`, so document switches need an explicit shared copy.
+        caseCustomer: {},
+        caseSubscriberNumber: "",
+        resettingCase: false,
       };
     },
     computed: {
@@ -22,16 +36,42 @@
       newOwnerTabRows() {
         return state.layouts.new_owner;
       },
+      representativeTabRows() {
+        return state.layouts.representative;
+      },
       documentTabLayout() {
         return state.layouts.document;
       },
-      // Transfer shows a single intake card (visually where "customer"
-      // sits) but its images belong to the new_owner party -- mirrors
+      simTabLayout() {
+        return state.layouts.sims;
+      },
+      isTransfer() {
+        return state.document_type === "transfer";
+      },
+      isPrepaid() {
+        return state.document_type === "prepaid_contract";
+      },
+      usesOrganizationCustomer() {
+        return state.document_type === "transfer" || state.document_type === "aftersale" || this.isPrepaid;
+      },
+      calendarValue() {
+        if (!this.calendar) return "";
+        return CCCD.getByPath(this.calendar.root || state, this.calendar.field.path) || "";
+      },
+      calendarInProfile() {
+        const path = this.calendar?.field?.path || "";
+        return !!this.profile && (
+          path.startsWith("profile.") || path.startsWith("representative.")
+        );
+      },
+      // Organization-first documents show a single intake card (visually
+      // where "customer" sits) but its images belong to the person in the
+      // second tab -- mirrors
       // HomePage._upload_card_for_target()/_start_primary_ocr() in the old
       // PyQt UI: the widget position is fixed, the OCR target it feeds is
       // not.
       primaryUploadTarget() {
-        return state.document_type === "transfer" ? "new_owner" : "customer";
+        return this.usesOrganizationCustomer ? "new_owner" : "customer";
       },
       // Wraps the open profile dialog's PersonData so field paths resolved
       // as "profile.full_name" (see get_company_profile_layout()) land on
@@ -40,13 +80,52 @@
       profileRoot() {
         return { profile: this.profile || {} };
       },
+      representativeRoot() {
+        return { representative: this.representative || {} };
+      },
+      profileTabsList() {
+        return [
+          { id: "company", label: "Thông tin công ty", visible: true },
+          { id: "representative", label: "Người đại diện", visible: true },
+        ];
+      },
       tabsList() {
         const t = state.ui.tabs;
         return [
           { id: "customer", label: t.customerLabel, visible: true },
+          { id: "representative", label: t.representativeLabel, visible: t.representativeTabVisible },
           { id: "new_owner", label: t.newOwnerLabel, visible: t.newOwnerTabVisible },
           { id: "document", label: t.documentLabel, visible: true },
+          { id: "sims", label: t.simsLabel, visible: t.simsTabVisible },
         ];
+      },
+    },
+    watch: {
+      // One-directional only: typing a subscriber number in the scan column
+      // pushes it into Beautiful Number's table row 1, but editing row 1
+      // itself must never write back here (explicit request) -- an empty
+      // scan-column value leaves row 1 exactly as it already is.
+      "state.subscriber_number"(value) {
+        this.caseSubscriberNumber = value == null ? "" : String(value);
+        if (value) state.subscriber_number_1 = value;
+        if (state.document_type === "beautiful_number" && state.beautiful_subscribers?.length && value) {
+          state.beautiful_subscribers[0].subscriber_number = value;
+        }
+        if (state.document_type === "prepaid_contract" && state.prepaid_subscribers?.length) {
+          state.prepaid_subscribers[0].subscriber_number = value || "";
+        }
+      },
+      "state.customer": {
+        deep: true,
+        handler(value) {
+          this.rememberCaseCustomer("customer", value);
+        },
+      },
+      "state.new_owner": {
+        deep: true,
+        handler(value) {
+          this.rememberCaseCustomer("new_owner", value);
+        },
       },
     },
     async mounted() {
@@ -60,6 +139,14 @@
         state.ui.upload[target].progress = { done, total };
         state.ui.upload[target].busy = true;
       });
+      // "representative" is a 3rd OCR target -- the Company Profile dialog's
+      // own "Người đại diện" intake card, writing into this.representative
+      // (a dialog-local session record) instead of the main case's
+      // state.customer/new_owner, and skipping the main-window raw-OCR
+      // panel/tab switch below (that dialog has no such panel of its own).
+      const personFor = (target) =>
+        target === "customer" ? state.customer : target === "new_owner" ? state.new_owner : this.representative;
+
       CCCD.bridge.onOcrFileResult((target, result) => {
         const up = state.ui.upload[target];
         if (result.error || result.side === "unknown") {
@@ -69,20 +156,37 @@
           return;
         }
         up[result.side] = { thumbnail: result.thumbnail_data_url, filename: `${result.filename} · ${result.source}` };
-        const person = target === "customer" ? state.customer : state.new_owner;
-        CCCD.mergeNonEmpty(person, result.fields);
+        const person = personFor(target);
+        if (person) {
+          CCCD.mergeNonEmpty(person, result.fields);
+          this.rememberCaseCustomer(target, result.fields);
+        }
       });
       CCCD.bridge.onOcrBatchFinished((target, result) => {
         const up = state.ui.upload[target];
         up.progress = null;
         up.busy = false;
-        if (result.accepted) {
-          const person = target === "customer" ? state.customer : state.new_owner;
-          Object.assign(person, result.fields);
+        const person = personFor(target);
+        if (result.accepted && person) {
+          // A missing OCR field means "not read", not "erase the value the
+          // user already had". This also updates the shared case identity
+          // immediately, before any document switch can occur.
+          CCCD.mergeNonEmpty(person, result.fields);
+          this.rememberCaseCustomer(target, result.fields);
         }
         up.note = (result.warnings || []).join("\n");
         up.invalid = !!up.note;
-        const label = target === "customer" ? "KHÁCH HÀNG" : "CHỦ THUÊ BAO MỚI";
+        if (target === "representative") {
+          state.ui.statusMessage = result.accepted
+            ? "Đã đọc xong CCCD người đại diện · hãy đối chiếu các trường vừa điền"
+            : "Chưa nhận biết được mặt CCCD · ảnh hiện có vẫn được giữ";
+          return;
+        }
+        const label = target === "customer" || (
+          target === "new_owner" && ["aftersale", "prepaid_contract"].includes(state.document_type)
+        )
+          ? "KHÁCH HÀNG"
+          : "CHỦ THUÊ BAO MỚI";
         state.ui.ocrRawText[target] = `===== ${label} =====\n${result.raw_text}`;
         state.ui.ocrPanelOpen = true;
         state.ui.activeTab = target === "customer" ? "customer" : "new_owner";
@@ -101,32 +205,103 @@
       });
     },
     methods: {
-      async onDocumentTypeChange(newType) {
+      caseCustomerKey(documentType = state.document_type) {
+        return ["transfer", "aftersale", "prepaid_contract"].includes(documentType)
+          ? "new_owner"
+          : "customer";
+      },
+      rememberCaseCustomer(sourceKey, fields) {
+        if (this.resettingCase || sourceKey === "representative") return;
+        if (sourceKey !== this.caseCustomerKey()) return;
+        CCCD.mergeNonEmpty(this.caseCustomer, fields);
+      },
+      captureCaseContext(documentType = state.document_type) {
+        if (this.resettingCase) return;
+        const sourceKey = this.caseCustomerKey(documentType);
+        CCCD.mergeNonEmpty(this.caseCustomer, state[sourceKey] || {});
+        this.caseSubscriberNumber = state.subscriber_number == null
+          ? ""
+          : String(state.subscriber_number);
+      },
+      applyCaseContext(snapshot, documentType) {
+        const targetKey = this.caseCustomerKey(documentType);
+        if (!snapshot[targetKey] || typeof snapshot[targetKey] !== "object") {
+          snapshot[targetKey] = {};
+        }
+        // Sparse merge by design: fields absent from the shared customer
+        // record must not blank a value already edited in this document.
+        CCCD.mergeNonEmpty(snapshot[targetKey], this.caseCustomer);
+        if (this.caseSubscriberNumber) {
+          snapshot.subscriber_number = this.caseSubscriberNumber;
+          snapshot.subscriber_number_1 = this.caseSubscriberNumber;
+          // These two documents print row 1 from their structured table,
+          // not directly from the root subscriber_number. Update the row
+          // here as well; relying on the Vue watcher would miss switches
+          // where the root value happens to be unchanged.
+          if (documentType === "beautiful_number" && snapshot.beautiful_subscribers?.length) {
+            snapshot.beautiful_subscribers[0].subscriber_number = this.caseSubscriberNumber;
+          }
+          if (documentType === "prepaid_contract" && snapshot.prepaid_subscribers?.length) {
+            snapshot.prepaid_subscribers[0].subscriber_number = this.caseSubscriberNumber;
+          }
+        }
+      },
+      async onDocumentTypeChange(newType, options = {}) {
         const previous = state.document_type;
-        const snapshot = CCCD.reportDataSnapshot();
+        const switching = previous !== newType;
+        const clone = (value) => JSON.parse(JSON.stringify(value));
+
+        this.captureCaseContext(previous);
+        if (switching && previous && !options.skipDraftSave) {
+          this.documentDrafts[previous] = clone(CCCD.reportDataSnapshot());
+        }
+
+        let snapshot;
+        let applyProfileDefaults = !!options.forceProfileDefaults;
+        if (!switching) {
+          snapshot = clone(CCCD.reportDataSnapshot());
+        } else if (newType && this.documentDrafts[newType]) {
+          snapshot = clone(this.documentDrafts[newType]);
+        } else {
+          snapshot = await CCCD.bridge.getNewDocumentState(newType);
+          applyProfileDefaults = !!newType;
+        }
+        snapshot.document_type = newType;
+        this.applyCaseContext(snapshot, newType);
+
         const result = await CCCD.bridge.onDocumentTypeChanged({
           previous_document_type: previous,
           new_document_type: newType,
-          state: { ...snapshot, document_type: newType },
+          state: snapshot,
+          apply_profile_defaults: applyProfileDefaults,
+          preserve_subject: false,
         });
+        if (switching || options.replaceState) Object.assign(state, snapshot);
         state.document_type = newType;
         CCCD.applyStatePatch(result.state_patch);
         Object.assign(state.ui, result.ui, { errors: state.ui.errors, upload: state.ui.upload, toasts: state.ui.toasts });
         state.layouts.customer = result.layouts.customer;
+        state.layouts.representative = result.layouts.representative;
         state.layouts.new_owner = result.layouts.new_owner;
         state.layouts.document = result.layouts.document;
+        state.layouts.sims = result.layouts.sims;
         state.ui.activeTab = "customer";
+        if (newType) this.documentDrafts[newType] = clone(CCCD.reportDataSnapshot());
       },
       async onEntityTypeChange(form) {
         const entityType = form === "customer" ? state.customer.entity_type : state.new_owner.entity_type;
         const layout = await CCCD.bridge.onEntityTypeChanged(form, entityType);
         state.layouts[form] = layout;
       },
-      openCalendar({ field, $event }) {
-        this.calendar = { field, anchorRect: $event.target.getBoundingClientRect() };
+      openCalendar({ field, root, $event }) {
+        this.calendar = { field, root, anchorRect: $event.target.getBoundingClientRect() };
       },
       pickDate(value) {
-        CCCD.setByPath(state, this.calendar.field.path, value);
+        CCCD.setByPath(this.calendar.root || state, this.calendar.field.path, value);
+        delete state.ui.errors[this.calendar.field.path];
+        if (this.calendar.field.path === "prepaid_subscribers.0.activation_date") {
+          state.activation_date = value;
+        }
         this.calendar = null;
       },
       toggleDetail(section) {
@@ -138,7 +313,10 @@
         if (errors.length) {
           for (const e of errors) state.ui.errors[e.path] = e.message;
           const first = errors[0].path;
-          state.ui.activeTab = first.startsWith("customer.") ? "customer" : first.startsWith("new_owner.") ? "new_owner" : "document";
+          state.ui.activeTab = first.startsWith("customer.") ? "customer"
+            : first.startsWith("representative.") ? "representative"
+            : first.startsWith("new_owner.") ? "new_owner"
+            : first.startsWith("prepaid_subscribers.") ? "sims" : "document";
           state.ui.statusMessage = `Còn ${errors.length} trường cần bổ sung · xem thông báo màu đỏ dưới ô nhập`;
           return;
         }
@@ -162,23 +340,64 @@
         if (!result.ok) CCCD.pushToast(result.message, "error");
       },
       async newCase() {
-        const fresh = await CCCD.bridge.newCase(CCCD.reportDataSnapshot());
-        Object.assign(state, fresh);
-        state.ui.upload.customer = { front: null, back: null, status: "Chưa có ảnh", invalid: false, note: "", busy: false, progress: null };
-        state.ui.upload.new_owner = { front: null, back: null, status: "Chưa có ảnh", invalid: false, note: "", busy: false, progress: null };
-        state.ui.ocrRawText = { customer: "", new_owner: "" };
-        state.ui.ocrPanelOpen = false;
-        state.ui.errors = {};
-        state.ui.activeTab = "customer";
-        if (state.document_type) await this.onDocumentTypeChange(state.document_type);
-        state.ui.statusMessage = "Đã mở hồ sơ mới · biểu mẫu và thông tin cửa hàng được giữ lại";
+        const documentType = state.document_type;
+        this.resettingCase = true;
+        try {
+          const fresh = await CCCD.bridge.newCase(CCCD.reportDataSnapshot());
+          this.caseCustomer = {};
+          this.caseSubscriberNumber = "";
+          this.documentDrafts = {};
+          Object.assign(state, fresh);
+          state.ui.upload.customer = { front: null, back: null, status: "Chưa có ảnh", invalid: false, note: "", busy: false, progress: null };
+          state.ui.upload.new_owner = { front: null, back: null, status: "Chưa có ảnh", invalid: false, note: "", busy: false, progress: null };
+          state.ui.ocrRawText = { customer: "", new_owner: "" };
+          state.ui.ocrPanelOpen = false;
+          state.ui.errors = {};
+          state.ui.activeTab = "customer";
+          if (documentType) {
+            await this.onDocumentTypeChange(documentType, {
+              forceProfileDefaults: true,
+              replaceState: true,
+              skipDraftSave: true,
+            });
+          }
+        } finally {
+          this.resettingCase = false;
+        }
+        state.ui.statusMessage = "Đã mở hồ sơ mới · đã áp dụng thông tin mặc định mới nhất";
+      },
+      async updateFromProfileDefaults() {
+        if (!state.document_type) return;
+        const patch = await CCCD.bridge.applyProfileDefaults(state.document_type);
+        CCCD.applyStatePatch(patch);
+        for (const path of Object.keys(state.ui.errors)) {
+          if (
+            path.startsWith("customer.") || path.startsWith("representative.") ||
+            [
+              "shop_name", "shop_address", "shop_phone", "shop_phone_2",
+              "shop_id_number", "shop_issue_date", "shop_issue_place",
+              "provider_representative", "provider_position", "provider_phone",
+              "provider_email", "provider_unit_address",
+            ].includes(path)
+          ) delete state.ui.errors[path];
+        }
+        this.documentDrafts[state.document_type] = JSON.parse(
+          JSON.stringify(CCCD.reportDataSnapshot())
+        );
+        CCCD.pushToast("Đã cập nhật tài liệu từ thông tin công ty và người đại diện", "success");
       },
       async openCompanyProfile() {
-        const [person, layout] = await Promise.all([CCCD.bridge.getCompanyProfile(), CCCD.bridge.getCompanyProfileLayout()]);
+        const [person, layout, representative, representativeLayout] = await Promise.all([
+          CCCD.bridge.getCompanyProfile(), CCCD.bridge.getCompanyProfileLayout(),
+          CCCD.bridge.getRepresentativeProfile(), CCCD.bridge.getRepresentativeProfileLayout(),
+        ]);
         this.profile = person;
         this.profileLayout = layout;
+        this.representative = representative;
+        this.representativeLayout = representativeLayout;
+        this.profileTab = "company";
         for (const key of Object.keys(state.ui.errors)) {
-          if (key.startsWith("profile.")) delete state.ui.errors[key];
+          if (key.startsWith("profile.") || key.startsWith("representative.")) delete state.ui.errors[key];
         }
         this.$nextTick(() => this.$refs.profileDialog.showModal());
       },
@@ -190,8 +409,19 @@
         }
         this.$refs.profileDialog.close();
         this.profile = null;
-        if (state.document_type) await this.onDocumentTypeChange(state.document_type);
-        CCCD.pushToast("Đã lưu thông tin công ty", "success");
+        this.representative = null;
+        CCCD.pushToast("Đã lưu mặc định công ty · dùng nút cập nhật để áp dụng lại vào tài liệu đang sửa", "success");
+      },
+      async saveRepresentativeProfile() {
+        const result = await CCCD.bridge.saveRepresentativeProfile(this.representative);
+        if (!result.ok) {
+          for (const e of result.errors) state.ui.errors[e.path] = e.message;
+          return;
+        }
+        this.$refs.profileDialog.close();
+        this.profile = null;
+        this.representative = null;
+        CCCD.pushToast("Đã lưu mặc định người đại diện · dùng nút cập nhật để áp dụng lại vào tài liệu đang sửa", "success");
       },
     },
     template: `
@@ -238,22 +468,42 @@
             <tabs :tabs="tabsList" v-model="state.ui.activeTab" />
 
             <div class="tabpanel" v-show="state.ui.activeTab === 'customer'" style="overflow-y:auto; flex:1;">
-              <form-grid :rows="customerTabRows.primary_rows" :root="state" @open-calendar="openCalendar" @entity-type-changed="onEntityTypeChange('customer')" />
+              <subscriber-information-form v-if="isTransfer" :rows="customerTabRows.primary_rows"
+                :root="state" @open-calendar="openCalendar"
+                @entity-type-changed="onEntityTypeChange('customer')" />
+              <organization-information-form v-else-if="usesOrganizationCustomer" :rows="customerTabRows.primary_rows"
+                :root="state" @open-calendar="openCalendar" />
+              <form-grid v-else :rows="customerTabRows.primary_rows" :root="state" @open-calendar="openCalendar" @entity-type-changed="onEntityTypeChange('customer')" />
               <disclosure v-if="customerTabRows.has_detail" v-model="state.ui.detailOpen.customer" label="Thông tin chi tiết" style="margin-top: var(--space-sm);">
                 <form-grid :rows="customerTabRows.detail_rows" :root="state" @open-calendar="openCalendar" @entity-type-changed="onEntityTypeChange('customer')" />
               </disclosure>
             </div>
 
             <div class="tabpanel" v-show="state.ui.activeTab === 'new_owner'" style="overflow-y:auto; flex:1;">
-              <form-grid :rows="newOwnerTabRows.primary_rows" :root="state" @open-calendar="openCalendar" @entity-type-changed="onEntityTypeChange('new_owner')" />
+              <subscriber-information-form v-if="isTransfer" :rows="newOwnerTabRows.primary_rows"
+                :root="state" @open-calendar="openCalendar"
+                @entity-type-changed="onEntityTypeChange('new_owner')" />
+              <personal-information-form v-else-if="isPrepaid" :rows="newOwnerTabRows.primary_rows"
+                :root="state" @open-calendar="openCalendar" />
+              <form-grid v-else :rows="newOwnerTabRows.primary_rows" :root="state" @open-calendar="openCalendar" @entity-type-changed="onEntityTypeChange('new_owner')" />
               <disclosure v-if="newOwnerTabRows.has_detail" v-model="state.ui.detailOpen.new_owner" label="Thông tin chi tiết" style="margin-top: var(--space-sm);">
                 <form-grid :rows="newOwnerTabRows.detail_rows" :root="state" @open-calendar="openCalendar" @entity-type-changed="onEntityTypeChange('new_owner')" />
               </disclosure>
             </div>
 
+            <div class="tabpanel" v-show="state.ui.activeTab === 'representative'" style="overflow-y:auto; flex:1;">
+              <personal-information-form :rows="representativeTabRows.primary_rows"
+                :root="state" @open-calendar="openCalendar" />
+            </div>
+
             <div class="tabpanel" v-show="state.ui.activeTab === 'document'" style="overflow-y:auto; flex:1;">
-              <form-grid :rows="documentTabLayout.common_rows" :root="state" @open-calendar="openCalendar" />
-              <form-grid :rows="documentTabLayout.primary_rows" :root="state" @open-calendar="openCalendar" style="margin-top:11px;" />
+              <sectioned-form v-if="isPrepaid" :sections="documentTabLayout.sections || []"
+                :root="state" @open-calendar="openCalendar" />
+              <template v-else>
+                <form-grid :rows="documentTabLayout.common_rows" :root="state" @open-calendar="openCalendar" />
+                <form-grid :rows="documentTabLayout.primary_rows" :root="state" @open-calendar="openCalendar"
+                  :style="{ marginTop: documentTabLayout.common_rows.length ? '11px' : '0' }" />
+              </template>
               <disclosure v-if="documentTabLayout.has_detail" v-model="state.ui.detailOpen.document" label="Thông tin chi tiết" style="margin-top: var(--space-sm);">
                 <form-grid :rows="documentTabLayout.detail_rows" :root="state" @open-calendar="openCalendar" />
               </disclosure>
@@ -263,6 +513,11 @@
                   v-model="state.notes"></textarea>
               </div>
             </div>
+
+            <div class="tabpanel" v-show="state.ui.activeTab === 'sims'" style="overflow-y:auto; flex:1;">
+              <prepaid-sim-table v-if="isPrepaid" :layout="simTabLayout" :root="state"
+                @open-calendar="openCalendar" />
+            </div>
           </template>
 
           <div v-else class="empty-state">
@@ -271,14 +526,18 @@
           </div>
 
           <div class="action-bar">
+            <button class="btn btn--ghost" style="margin-right:auto;" type="button"
+              :disabled="!documentReady" @click="updateFromProfileDefaults">
+              ↻ Cập nhật từ thông tin mặc định
+            </button>
             <button class="btn" type="button" :disabled="!documentReady" @click="preview">Xem trước</button>
             <button class="btn btn--primary" type="button" :disabled="!documentReady" @click="openReview">Tạo tài liệu</button>
           </div>
         </div>
       </div>
 
-      <calendar-popover v-if="calendar" :anchor-rect="calendar.anchorRect"
-        :value="CCCD.getByPath(state, calendar.field.path)"
+      <calendar-popover v-if="calendar && !calendarInProfile" :anchor-rect="calendar.anchorRect"
+        :value="calendarValue"
         @pick="pickDate" @close="calendar = null" />
 
       <dialog class="modal" ref="reviewDialog" @close="reviewOpen = false">
@@ -293,19 +552,31 @@
         </div>
       </dialog>
 
-      <dialog class="modal" ref="profileDialog" @close="profile = null" style="width:min(900px,92vw);">
-        <div class="modal__body" v-if="profile && profileLayout">
+      <dialog class="modal" ref="profileDialog" @close="profile = null; representative = null; calendar = null" style="width:min(900px,92vw);">
+        <div class="modal__body" v-if="profile && profileLayout && representative && representativeLayout">
           <h2 class="modal__title">Thông tin công ty</h2>
-          <p class="muted-text">Thông tin cố định của công ty, ít thay đổi — tự áp dụng làm mặc định cho mọi tài liệu (Bên A, người đại diện ký...). Sửa riêng cho một tài liệu cụ thể ở màn hình kiểm tra thông tin sẽ không ghi đè lên hồ sơ mặc định này.</p>
-          <form-grid :rows="profileLayout.primary_rows" :root="profileRoot" @open-calendar="openCalendar" />
-          <disclosure v-if="profileLayout.has_detail" v-model="state.ui.detailOpen.profile" label="Thông tin chi tiết">
-            <form-grid :rows="profileLayout.detail_rows" :root="profileRoot" @open-calendar="openCalendar" />
-          </disclosure>
+          <tabs :tabs="profileTabsList" v-model="profileTab" style="margin-bottom: var(--space-sm);" />
+
+          <template v-if="profileTab === 'company'">
+            <p class="muted-text">Thông tin cố định của công ty, ít thay đổi — tự áp dụng làm mặc định cho mọi tài liệu (Bên A, người đại diện ký...). Sửa riêng cho một tài liệu cụ thể ở màn hình kiểm tra thông tin sẽ không ghi đè lên hồ sơ mặc định này.</p>
+            <organization-information-form :rows="profileLayout.primary_rows" :root="profileRoot"
+              @open-calendar="openCalendar" />
+          </template>
+
+          <template v-else>
+            <p class="muted-text">Hồ sơ người đại diện hợp pháp của công ty — lưu riêng một lần, tự áp dụng làm "Người đại diện" cho các tài liệu cần đến (Giấy cam kết sau bán hàng...).</p>
+            <upload-card target="representative" />
+            <personal-information-form :rows="representativeLayout.primary_rows" :root="representativeRoot"
+              @open-calendar="openCalendar" style="margin-top: var(--space-sm);" />
+          </template>
         </div>
         <div class="modal__actions">
           <button class="btn" type="button" @click="$refs.profileDialog.close()">Hủy</button>
-          <button class="btn btn--primary" type="button" @click="saveProfile">Lưu thông tin công ty</button>
+          <button v-if="profileTab === 'company'" class="btn btn--primary" type="button" @click="saveProfile">Lưu thông tin công ty</button>
+          <button v-else class="btn btn--primary" type="button" @click="saveRepresentativeProfile">Lưu thông tin người đại diện</button>
         </div>
+        <calendar-popover v-if="calendar && calendarInProfile" :anchor-rect="calendar.anchorRect"
+          :value="calendarValue" @pick="pickDate" @close="calendar = null" />
       </dialog>
 
       <toast-stack />
@@ -322,7 +593,13 @@
   app.config.globalProperties.CCCD = CCCD;
   app.component("FieldInput", CCCD.components.FieldInput);
   app.component("CheckboxGroup", CCCD.components.CheckboxGroup);
+  app.component("SubscriberTable", CCCD.components.SubscriberTable);
   app.component("FormGrid", CCCD.components.FormGrid);
+  app.component("SectionedForm", CCCD.components.SectionedForm);
+  app.component("PrepaidSimTable", CCCD.components.PrepaidSimTable);
+  app.component("PersonalInformationForm", CCCD.components.PersonalInformationForm);
+  app.component("OrganizationInformationForm", CCCD.components.OrganizationInformationForm);
+  app.component("SubscriberInformationForm", CCCD.components.SubscriberInformationForm);
   app.component("Disclosure", CCCD.components.Disclosure);
   app.component("Tabs", CCCD.components.Tabs);
   app.component("UploadCard", CCCD.components.UploadCard);

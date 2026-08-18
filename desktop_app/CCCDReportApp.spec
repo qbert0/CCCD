@@ -19,7 +19,7 @@ datas = [
         "desktop_app/backend/documents/aftersale",
     ),
     (
-        str(project_dir / "desktop_app/backend/documents/beautiful_number/00_MAU_PHU_LUC_CAM_KET_SO_DEP.pdf"),
+        str(project_dir / "desktop_app/backend/documents/beautiful_number/00_MAU_PHU_LUC_CAM_KET_SO_DEP_editable.docx"),
         "desktop_app/backend/documents/beautiful_number",
     ),
     (
@@ -29,6 +29,7 @@ datas = [
     (str(project_dir / "desktop_app/data/source/samples"), "desktop_app/data/source/samples"),
     (str(project_dir / "desktop_app/assets"), "desktop_app/assets"),
     (str(project_dir / "runtime_models/paddle"), "runtime_models/paddle"),
+    (str(project_dir / "runtime_models/vietocr"), "runtime_models/vietocr"),
     # The HTML/CSS/JS view layer -- static assets Analysis can't discover by
     # following imports, since nothing in Python ever `import`s them.
     (str(project_dir / "desktop_app/frontend/web"), "desktop_app/frontend/web"),
@@ -55,13 +56,24 @@ hiddenimports += [
     "PyQt5.QtPrintSupport",
 ]
 
-for package in ("paddle", "paddleocr", "docx", "reportlab", "pypdf", "backports.tarfile"):
+for package in (
+    "paddle",
+    "paddleocr",
+    "docx",
+    "reportlab",
+    "pypdf",
+    "backports.tarfile",
+    "torch",
+    "torchvision",
+    "vietocr",
+):
     package_datas, package_binaries, package_hidden = collect_all(package)
     datas += package_datas
     binaries += package_binaries
     hiddenimports += package_hidden
 
 binaries += collect_dynamic_libs("paddle")
+binaries += collect_dynamic_libs("torch")
 
 a = Analysis(
     [str(project_dir / "desktop_app/main.py")],
@@ -72,7 +84,10 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["torch", "tensorflow", "ultralytics", "PySide6"],
+    # torch/torchvision are now a real runtime dependency (VietOCR
+    # recognizer, see desktop_app/backend/ocr/engines/paddle.py) and must
+    # NOT be excluded here — they're explicitly collect_all()'d above instead.
+    excludes=["tensorflow", "ultralytics", "PySide6"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

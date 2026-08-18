@@ -273,16 +273,17 @@ class HomePage(QMainWindow):
         for button in (self.preview_button, self.export_button):
             button.setEnabled(ready)
         if not ready:
-            if self._active_document_type == DocumentType.TRANSFER:
+            if self._active_document_type in {DocumentType.TRANSFER, DocumentType.AFTERSALE}:
                 self._preserve_transfer_subject()
             self._active_document_type = None
             self.new_owner_upload.setVisible(False)
             return
         document_type = self._current_type()
         preserved_subject: PersonData | None = None
-        if self._active_document_type == DocumentType.TRANSFER and document_type != DocumentType.TRANSFER:
+        organization_documents = {DocumentType.TRANSFER, DocumentType.AFTERSALE}
+        if self._active_document_type in organization_documents and document_type not in organization_documents:
             preserved_subject = self.new_owner_tab.form.data()
-        elif self._active_document_type != DocumentType.TRANSFER and document_type == DocumentType.TRANSFER:
+        elif self._active_document_type not in organization_documents and document_type in organization_documents:
             preserved_subject = self.customer_tab.form.data()
 
         self.document_tab.set_document_type(document_type)
@@ -291,23 +292,18 @@ class HomePage(QMainWindow):
         if preserved_subject and self._has_identity(preserved_subject):
             target_form = (
                 self.new_owner_tab.form
-                if document_type == DocumentType.TRANSFER
+                if document_type in organization_documents
                 else self.customer_tab.form
             )
             target_form.set_person(preserved_subject)
         self.customer_tab.form.configure(document_type, "customer")
         self.new_owner_tab.form.configure(document_type, "new_owner")
-        if document_type == DocumentType.TRANSFER:
+        if document_type in organization_documents:
             self._apply_company_profile()
 
-        aftersale = self.document_tab.forms[DocumentType.AFTERSALE]
-        needs_new = document_type == DocumentType.TRANSFER or (
-            document_type == DocumentType.AFTERSALE and aftersale.action.currentText() == "Chuyển chủ quyền"
-        )
+        needs_new = document_type in organization_documents
         self.tabs.setTabVisible(self.new_owner_index, needs_new)
-        # Transfer uses the single primary intake for Party C.  The second intake
-        # remains available only for the after-sale workflow that truly has two people.
-        self.new_owner_upload.setVisible(needs_new and document_type != DocumentType.TRANSFER)
+        self.new_owner_upload.setVisible(False if document_type in organization_documents else needs_new)
         self.new_owner_tab.form.set_identity_required(needs_new)
         if document_type == DocumentType.TRANSFER:
             # Transfer is the one document where "customer_tab" actually holds
@@ -318,6 +314,10 @@ class HomePage(QMainWindow):
             self.tabs.setTabText(self.customer_index, "Tổ chức")
             self.tabs.setTabText(self.new_owner_index, "Thuê bao")
             self.tabs.setTabText(self.document_index, "Hợp đồng")
+        elif document_type == DocumentType.AFTERSALE:
+            self.tabs.setTabText(self.customer_index, "Tổ chức")
+            self.tabs.setTabText(self.new_owner_index, "Khách hàng")
+            self.tabs.setTabText(self.document_index, "Thông tin tài liệu")
         else:
             self.tabs.setTabText(self.customer_index, "Khách hàng")
             self.tabs.setTabText(self.new_owner_index, "Chủ thuê bao mới")
@@ -368,7 +368,9 @@ class HomePage(QMainWindow):
     def _company_profile_saved(self, person: PersonData) -> None:
         self.company_profile = person
         self._apply_shop_defaults()
-        if self.document_combo.currentData() == DocumentType.TRANSFER.value:
+        if self.document_combo.currentData() in {
+            DocumentType.TRANSFER.value, DocumentType.AFTERSALE.value,
+        }:
             self._apply_company_profile()
         if self.document_combo.currentData():
             self._apply_provider_defaults(self._current_type())
@@ -377,7 +379,9 @@ class HomePage(QMainWindow):
     def _start_primary_ocr(self, paths: list[Path]) -> None:
         target = (
             "new_owner"
-            if self.document_combo.currentData() == DocumentType.TRANSFER.value
+            if self.document_combo.currentData() in {
+                DocumentType.TRANSFER.value, DocumentType.AFTERSALE.value,
+            }
             else "customer"
         )
         self._start_ocr(target, paths)
@@ -400,7 +404,9 @@ class HomePage(QMainWindow):
     def _upload_card_for_target(self, target: str) -> ImageUploadCard:
         if target == "customer":
             return self.customer_upload
-        if self.document_combo.currentData() == DocumentType.TRANSFER.value:
+        if self.document_combo.currentData() in {
+            DocumentType.TRANSFER.value, DocumentType.AFTERSALE.value,
+        }:
             return self.customer_upload
         return self.new_owner_upload
 
@@ -554,13 +560,17 @@ class HomePage(QMainWindow):
         self.customer_tab.form.clear_errors()
         self.new_owner_tab.form.clear_errors()
         self.document_tab.clear_errors()
-        if self.document_combo.currentData() == DocumentType.TRANSFER.value:
+        if self.document_combo.currentData() in {
+            DocumentType.TRANSFER.value, DocumentType.AFTERSALE.value,
+        }:
             active_side_errors = list(self.ocr_side_errors_by_target.get("new_owner", []))
         else:
             active_side_errors = list(self.ocr_side_errors_by_target.get("customer", []))
         if (
             self.new_owner_upload.isVisible()
-            and self.document_combo.currentData() != DocumentType.TRANSFER.value
+            and self.document_combo.currentData() not in {
+                DocumentType.TRANSFER.value, DocumentType.AFTERSALE.value,
+            }
         ):
             active_side_errors += self.ocr_side_errors_by_target.get("new_owner", [])
         if active_side_errors:
@@ -647,7 +657,9 @@ class HomePage(QMainWindow):
         self.raw_toggle.setChecked(False)
         self.tabs.setCurrentIndex(self.customer_index)
         self._document_changed()
-        if self.document_combo.currentData() == DocumentType.TRANSFER.value:
+        if self.document_combo.currentData() in {
+            DocumentType.TRANSFER.value, DocumentType.AFTERSALE.value,
+        }:
             self._apply_company_profile()
         self.statusBar().showMessage("Đã mở hồ sơ mới · biểu mẫu và thông tin cửa hàng được giữ lại")
 

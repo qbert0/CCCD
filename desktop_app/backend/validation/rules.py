@@ -20,7 +20,7 @@ LABELS = {
     "customer.business_registration_number": "Số đăng ký doanh nghiệp",
     "customer.business_registration_issue_place": "Nơi cấp giấy đăng ký doanh nghiệp",
     "customer.business_registration_issue_date": "Ngày cấp giấy đăng ký doanh nghiệp",
-    "customer.representative_name": "Người đại diện/ủy quyền",
+    "customer.representative_name": "Họ tên người đại diện",
     "customer.representative_position": "Chức vụ người đại diện",
     "customer.id_number": "Số CCCD/CMND",
     "customer.issue_date": "Ngày cấp",
@@ -40,6 +40,16 @@ LABELS = {
     "new_owner.date_of_birth": "Ngày sinh của chủ mới",
     "new_owner.address": "Địa chỉ chủ mới",
     "new_owner.nationality": "Quốc tịch của chủ mới",
+    "new_owner.phone": "Điện thoại khách hàng",
+    "representative.full_name": "Họ tên người đại diện",
+    "representative.id_number": "CCCD/CMND người đại diện",
+    "representative.issue_date": "Ngày cấp của người đại diện",
+    "representative.issue_place": "Nơi cấp của người đại diện",
+    "representative.date_of_birth": "Ngày sinh của người đại diện",
+    "representative.address": "Địa chỉ người đại diện",
+    "representative.nationality": "Quốc tịch người đại diện",
+    "representative.representative_position": "Chức vụ người đại diện",
+    "representative.phone": "Điện thoại người đại diện",
     "document_date": "Ngày lập tài liệu",
     "subscriber_number": "Số thuê bao",
     "shop_name": "Tên cửa hàng",
@@ -53,6 +63,10 @@ LABELS = {
     "activation_date": "Ngày hòa mạng",
     "service_point_name": "Điểm cung cấp dịch vụ viễn thông",
     "registration_time": "Thời gian đăng ký thông tin thuê bao",
+    "provider_unit_address": "Địa chỉ đơn vị cung cấp",
+    "provider_representative": "Người đại diện bên cung cấp",
+    "service_point_address": "Địa điểm giao dịch",
+    "service_point_phone": "Số điện thoại điểm giao dịch",
     "payment_method": "Hình thức thanh toán",
     "transfer_effective_date": "Ngày chuyển quyền có hiệu lực",
 }
@@ -92,6 +106,30 @@ def party_required(prefix: str, person: PersonData) -> list[str]:
         f"{prefix}.date_of_birth",
         f"{prefix}.address",
         f"{prefix}.nationality",
+    ]
+
+
+def organization_information_required(prefix: str) -> list[str]:
+    """Required fields in the reusable company/organization form."""
+    return [
+        f"{prefix}.organization_name",
+        f"{prefix}.business_registration_number",
+        f"{prefix}.business_registration_issue_date",
+        f"{prefix}.business_registration_issue_place",
+        f"{prefix}.headquarters_address",
+    ]
+
+
+def personal_information_required(prefix: str) -> list[str]:
+    """Required fields in the reusable CCCD-backed personal form."""
+    return [
+        f"{prefix}.full_name",
+        f"{prefix}.id_number",
+        f"{prefix}.issue_date",
+        f"{prefix}.issue_place",
+        f"{prefix}.date_of_birth",
+        f"{prefix}.nationality",
+        f"{prefix}.address",
     ]
 
 

@@ -9,6 +9,9 @@ CCCD.components = {};
 CCCD.components.FieldInput = {
   props: { field: Object, root: Object },
   emits: ["open-calendar", "entity-type-changed"],
+  data() {
+    return { composing: false };
+  },
   computed: {
     value() {
       return CCCD.getByPath(this.root, this.field.path) ?? "";
@@ -35,9 +38,24 @@ CCCD.components.FieldInput = {
       }
     },
     onNumberInput(e) {
-      const cleaned = e.target.value.replace(/[^0-9 ]/g, "");
+      const maxLength = Number(this.field.max_length || 0);
+      const digits = e.target.value.replace(/\D/g, "");
+      const cleaned = maxLength ? digits.slice(0, maxLength) : digits;
       e.target.value = cleaned;
       this.setValue(cleaned);
+    },
+    onTextInput(e) {
+      if (!this.composing && !e.isComposing) this.setValue(e.target.value);
+    },
+    onCompositionStart() {
+      // Vietnamese IMEs emit several provisional input events while a word
+      // is being composed. Writing those fragments back through Vue's
+      // controlled :value would replace the browser's composition buffer.
+      this.composing = true;
+    },
+    onCompositionEnd(e) {
+      this.composing = false;
+      this.setValue(e.target.value);
     },
   },
   template: `
@@ -50,16 +68,18 @@ CCCD.components.FieldInput = {
         <option v-for="opt in field.options" :key="opt" :value="opt">{{ opt }}</option>
       </select>
       <textarea v-else-if="field.kind === 'textarea'" class="field__control" :id="field.path"
-        :placeholder="placeholder" :value="value" @input="setValue($event.target.value)"></textarea>
+        :placeholder="placeholder" :value="value" @input="onTextInput"
+        @compositionstart="onCompositionStart" @compositionend="onCompositionEnd"></textarea>
       <input v-else-if="field.kind === 'number'" class="field__control" type="text" inputmode="numeric"
         :id="field.path" :placeholder="placeholder" :value="value" :data-invalid="!!error"
+        :maxlength="field.max_length || null"
         @input="onNumberInput">
       <input v-else-if="field.kind === 'date'" class="field__control" type="text" :id="field.path"
         :placeholder="placeholder" :value="value" :data-invalid="!!error" readonly
-        @click="$emit('open-calendar', { field, $event })">
+        @click="$emit('open-calendar', { field, root, $event })">
       <input v-else class="field__control" type="text" :id="field.path"
         :placeholder="placeholder" :value="value" :data-invalid="!!error"
-        @input="setValue($event.target.value)">
+        @input="onTextInput" @compositionstart="onCompositionStart" @compositionend="onCompositionEnd">
       <div v-if="field.helper && !error" class="field__helper">{{ field.helper }}</div>
       <div v-if="error" class="field__error">{{ error }}</div>
     </div>
@@ -87,6 +107,142 @@ CCCD.components.CheckboxGroup = {
 };
 
 // ---------------------------------------------------------------------------
+// SubscriberTable -- unlimited Beautiful Number entries. The renderer puts
+// row 1 in the original form and paginates every remaining row onto clean
+// continuation sheets, so the UI no longer has an artificial two-row cap.
+// ---------------------------------------------------------------------------
+CCCD.components.SubscriberTable = {
+  props: { field: Object, root: Object },
+  data() {
+    return { composingPath: "" };
+  },
+  computed: {
+    rows() {
+      return this.root[this.field.list_path] || [];
+    },
+  },
+  mounted() {
+    if (!Array.isArray(this.root[this.field.list_path]) || !this.root[this.field.list_path].length) {
+      this.root[this.field.list_path] = [this.blankRow()];
+    }
+  },
+  methods: {
+    blankRow() {
+      return { subscriber_number: "", commitment_months: "12", monthly_fee: "", commitment_note: "" };
+    },
+    path(column, index) {
+      return `${this.field.list_path}.${index}.${column.name}`;
+    },
+    value(column, index) {
+      const value = String(this.rows[index]?.[column.name] ?? "");
+      return column.name === "commitment_months"
+        ? value.replace(/\s*tháng\s*$/i, "")
+        : value;
+    },
+    error(column, index) {
+      return CCCD.state.ui.errors[this.path(column, index)] || "";
+    },
+    setValue(column, index, value) {
+      this.rows[index][column.name] = value;
+      delete CCCD.state.ui.errors[this.path(column, index)];
+    },
+    onInput(column, index, e) {
+      if (e.isComposing || this.composingPath === this.path(column, index)) return;
+      let value = e.target.value;
+      if (column.kind === "number") {
+        value = value.replace(/\D/g, "");
+        e.target.value = value;
+      }
+      this.setValue(column, index, value);
+    },
+    onCompositionStart(column, index) {
+      this.composingPath = this.path(column, index);
+    },
+    onCompositionEnd(column, index, e) {
+      this.composingPath = "";
+      let value = e.target.value;
+      if (column.kind === "number") {
+        value = value.replace(/\D/g, "");
+        e.target.value = value;
+      }
+      this.setValue(column, index, value);
+    },
+    isMonth(column) {
+      return column.name === "commitment_months";
+    },
+    isMonthlyFee(column) {
+      return column.name === "monthly_fee";
+    },
+    suffix(column) {
+      if (this.isMonth(column)) return "tháng";
+      if (this.isMonthlyFee(column)) return ".000đ";
+      return "";
+    },
+    placeholder(column) {
+      if (this.isMonth(column)) return "Số tháng";
+      if (column.name === "subscriber_number") return "Nhập số thuê bao";
+      if (this.isMonthlyFee(column)) return "Nhập số nghìn đồng";
+      return "Nhập ghi chú";
+    },
+    addRow() {
+      this.rows.push(this.blankRow());
+    },
+    removeRow(index) {
+      if (this.rows.length === 1) this.rows.splice(0, 1, this.blankRow());
+      else this.rows.splice(index, 1);
+    },
+  },
+  template: `
+    <div class="subscriber-table">
+      <div class="subscriber-table__header">
+        <div>
+          <div class="subscriber-table__title">{{ field.label }}</div>
+          <div class="subscriber-table__hint">Có thể thêm nhiều số; tài liệu sẽ tự tạo trang tiếp theo</div>
+        </div>
+        <button type="button" class="btn btn--ghost subscriber-table__add" @click="addRow">＋ Thêm số</button>
+      </div>
+      <div class="subscriber-table__scroll">
+        <table class="subscriber-table__grid">
+          <colgroup>
+            <col class="subscriber-table__col-index">
+            <col v-for="c in field.columns" :key="c.label">
+            <col class="subscriber-table__col-actions">
+          </colgroup>
+          <thead>
+            <tr>
+              <th class="subscriber-table__index">STT</th>
+              <th v-for="c in field.columns" :key="c.label">{{ c.label }}</th>
+              <th><span class="sr-only">Thao tác</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(row, rowIndex) in rows" :key="rowIndex">
+              <td class="subscriber-table__index"><span>{{ rowIndex + 1 }}</span></td>
+              <td v-for="column in field.columns" :key="column.name">
+                <div class="subscriber-table__input-wrap" :data-invalid="!!error(column, rowIndex)">
+                  <input class="subscriber-table__input" type="text"
+                    :inputmode="column.kind === 'number' ? 'numeric' : 'text'"
+                    :placeholder="placeholder(column)" :value="value(column, rowIndex)"
+                    @input="onInput(column, rowIndex, $event)"
+                    @compositionstart="onCompositionStart(column, rowIndex)"
+                    @compositionend="onCompositionEnd(column, rowIndex, $event)">
+                  <span v-if="suffix(column)" class="subscriber-table__suffix">{{ suffix(column) }}</span>
+                </div>
+                <div v-if="error(column, rowIndex)" class="field__error">{{ error(column, rowIndex) }}</div>
+              </td>
+              <td class="subscriber-table__actions">
+                <button type="button" class="subscriber-table__remove"
+                  :aria-label="'Xóa số thuê bao dòng ' + (rowIndex + 1)" @click="removeRow(rowIndex)">Xóa</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `,
+};
+
+// ---------------------------------------------------------------------------
 // FormGrid -- renders resolved rows (span + field descriptor) from
 // web_bridge/schema.py. The wrapping/packing decision was already made in
 // Python (resolve_rows()); this is just a CSS grid with span classes.
@@ -97,12 +253,204 @@ CCCD.components.FormGrid = {
   template: `
     <div class="form-grid">
       <template v-for="(row, ri) in rows" :key="ri">
-        <div v-for="cell in row" :key="cell.field.path" :class="'form-grid__cell--span-' + cell.span">
+        <div v-for="(cell, ci) in row" :key="cell.field.path"
+          :class="['form-grid__cell--span-' + cell.span, ci === 0 ? 'form-grid__cell--row-start' : '']">
           <checkbox-group v-if="cell.field.kind === 'checkbox_group'" :field="cell.field" :root="root" />
+          <subscriber-table v-else-if="cell.field.kind === 'subscriber_table'" :field="cell.field" :root="root" />
           <field-input v-else :field="cell.field" :root="root" @open-calendar="$emit('open-calendar', $event)"
             @entity-type-changed="$emit('entity-type-changed', $event)" />
         </div>
       </template>
+    </div>
+  `,
+};
+
+// ---------------------------------------------------------------------------
+// SectionedForm -- provider information is easier to scan as two semantic
+// blocks while still reusing the same schema-driven FormGrid/FieldInput.
+// ---------------------------------------------------------------------------
+CCCD.components.SectionedForm = {
+  props: { sections: Array, root: Object },
+  emits: ["open-calendar"],
+  template: `
+    <div class="sectioned-form">
+      <section v-for="section in sections" :key="section.title" class="sectioned-form__section">
+        <div class="sectioned-form__heading">
+          <div class="sectioned-form__title">{{ section.title }}</div>
+          <div v-if="section.description" class="sectioned-form__description">{{ section.description }}</div>
+        </div>
+        <form-grid :rows="section.rows" :root="root" @open-calendar="$emit('open-calendar', $event)" />
+      </section>
+    </div>
+  `,
+};
+
+// ---------------------------------------------------------------------------
+// PrepaidSimTable -- the original contract provides five rows. Rows remain
+// ordinary ReportData values, support add/remove, validation and date picker.
+// ---------------------------------------------------------------------------
+CCCD.components.PrepaidSimTable = {
+  props: { layout: Object, root: Object },
+  emits: ["open-calendar"],
+  data() {
+    return { composingPath: "" };
+  },
+  computed: {
+    rows() {
+      if (!Array.isArray(this.root.prepaid_subscribers) || !this.root.prepaid_subscribers.length) {
+        this.root.prepaid_subscribers = [{ subscriber_number: "", sim_serial: "", activation_date: "" }];
+      }
+      return this.root.prepaid_subscribers;
+    },
+  },
+  methods: {
+    descriptor(column, index) {
+      return { ...column, path: `prepaid_subscribers.${index}.${column.name}` };
+    },
+    value(column, index) {
+      return String(this.rows[index]?.[column.name] ?? "");
+    },
+    error(column, index) {
+      return CCCD.state.ui.errors[`prepaid_subscribers.${index}.${column.name}`] || "";
+    },
+    setValue(column, index, value) {
+      this.rows[index][column.name] = value;
+      delete CCCD.state.ui.errors[`prepaid_subscribers.${index}.${column.name}`];
+      if (index === 0 && column.name === "subscriber_number") this.root.subscriber_number = value;
+      if (index === 0 && column.name === "sim_serial") this.root.sim_serial = value;
+      if (index === 0 && column.name === "activation_date") this.root.activation_date = value;
+    },
+    onInput(column, index, event) {
+      const path = `prepaid_subscribers.${index}.${column.name}`;
+      if (event.isComposing || this.composingPath === path) return;
+      let value = event.target.value;
+      if (column.kind === "number") {
+        value = value.replace(/\D/g, "");
+        event.target.value = value;
+      }
+      this.setValue(column, index, value);
+    },
+    onCompositionStart(column, index) {
+      this.composingPath = `prepaid_subscribers.${index}.${column.name}`;
+    },
+    onCompositionEnd(column, index, event) {
+      this.composingPath = "";
+      let value = event.target.value;
+      if (column.kind === "number") {
+        value = value.replace(/\D/g, "");
+        event.target.value = value;
+      }
+      this.setValue(column, index, value);
+    },
+    addRow() {
+      if (this.rows.length < this.layout.max_rows) {
+        this.rows.push({ subscriber_number: "", sim_serial: "", activation_date: "" });
+      }
+    },
+    removeRow(index) {
+      if (this.rows.length === 1) {
+        this.rows.splice(0, 1, { subscriber_number: "", sim_serial: "", activation_date: "" });
+      } else {
+        this.rows.splice(index, 1);
+      }
+      const first = this.rows[0];
+      this.root.subscriber_number = first.subscriber_number || "";
+      this.root.sim_serial = first.sim_serial || "";
+      this.root.activation_date = first.activation_date || "";
+    },
+    openDate(column, index, event) {
+      this.$emit("open-calendar", { field: this.descriptor(column, index), root: this.root, $event: event });
+    },
+  },
+  template: `
+    <div class="subscriber-table prepaid-sim-table">
+      <div class="subscriber-table__header">
+        <div>
+          <div class="subscriber-table__title">{{ layout.title }}</div>
+          <div class="subscriber-table__hint">{{ layout.hint }}</div>
+        </div>
+        <button v-if="rows.length < layout.max_rows" type="button" class="btn btn--ghost subscriber-table__add"
+          @click="addRow">＋ Thêm số</button>
+      </div>
+      <div class="subscriber-table__scroll">
+        <table class="subscriber-table__grid prepaid-sim-table__grid">
+          <colgroup><col class="subscriber-table__col-index"><col v-for="c in layout.columns" :key="c.name"><col class="subscriber-table__col-actions"></colgroup>
+          <thead><tr><th class="subscriber-table__index">STT</th><th v-for="c in layout.columns" :key="c.name">{{ c.label }}</th><th><span class="sr-only">Thao tác</span></th></tr></thead>
+          <tbody>
+            <tr v-for="(row, rowIndex) in rows" :key="rowIndex">
+              <td class="subscriber-table__index"><span>{{ rowIndex + 1 }}</span></td>
+              <td v-for="column in layout.columns" :key="column.name">
+                <div class="subscriber-table__input-wrap" :data-invalid="!!error(column, rowIndex)">
+                  <input class="subscriber-table__input" type="text"
+                    :readonly="column.kind === 'date'" :inputmode="column.kind === 'number' ? 'numeric' : 'text'"
+                    :placeholder="column.kind === 'date' ? 'dd/mm/yyyy' : 'Nhập ' + column.label.toLowerCase()"
+                    :value="value(column, rowIndex)"
+                    @input="onInput(column, rowIndex, $event)"
+                    @compositionstart="onCompositionStart(column, rowIndex)"
+                    @compositionend="onCompositionEnd(column, rowIndex, $event)"
+                    @click="column.kind === 'date' && openDate(column, rowIndex, $event)">
+                </div>
+                <div v-if="error(column, rowIndex)" class="field__error">{{ error(column, rowIndex) }}</div>
+              </td>
+              <td class="subscriber-table__actions"><button type="button" class="subscriber-table__remove" @click="removeRow(rowIndex)">Xóa</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `,
+};
+
+// ---------------------------------------------------------------------------
+// PersonalInformationForm / OrganizationInformationForm -- fixed reusable
+// identity forms. Their row definitions still come from Python's schema,
+// while these components own the distinct 3-column personal and 2-column
+// organization presentation. Keeping them separate makes future changes to
+// either form local instead of adding document/tab-specific CSS exceptions.
+// ---------------------------------------------------------------------------
+CCCD.components.PersonalInformationForm = {
+  props: { rows: Array, root: Object },
+  emits: ["open-calendar"],
+  template: `
+    <div class="information-form information-form--personal">
+      <div v-for="(row, ri) in rows" :key="ri" class="information-form__row">
+        <div v-for="cell in row" :key="cell.field.path" class="information-form__cell">
+          <field-input :field="cell.field" :root="root"
+            @open-calendar="$emit('open-calendar', $event)" />
+        </div>
+      </div>
+    </div>
+  `,
+};
+
+CCCD.components.OrganizationInformationForm = {
+  props: { rows: Array, root: Object },
+  emits: ["open-calendar"],
+  template: `
+    <div class="information-form information-form--organization">
+      <div v-for="(row, ri) in rows" :key="ri" class="information-form__row">
+        <div v-for="cell in row" :key="cell.field.path" class="information-form__cell">
+          <field-input :field="cell.field" :root="root"
+            @open-calendar="$emit('open-calendar', $event)" />
+        </div>
+      </div>
+    </div>
+  `,
+};
+
+CCCD.components.SubscriberInformationForm = {
+  props: { rows: Array, root: Object },
+  emits: ["open-calendar", "entity-type-changed"],
+  template: `
+    <div class="information-form information-form--subscriber">
+      <div v-for="(row, ri) in rows" :key="ri" class="information-form__row">
+        <div v-for="cell in row" :key="cell.field.path"
+          :class="['information-form__cell', 'information-form__cell--span-' + cell.span]">
+          <field-input :field="cell.field" :root="root"
+            @open-calendar="$emit('open-calendar', $event)"
+            @entity-type-changed="$emit('entity-type-changed', $event)" />
+        </div>
+      </div>
     </div>
   `,
 };
@@ -205,10 +553,15 @@ CCCD.components.CalendarPopover = {
     style() {
       if (!this.anchorRect) return {};
       const width = 260;
+      const estimatedHeight = 310;
       let left = this.anchorRect.left;
       const maxLeft = window.innerWidth - width - 8;
       if (left > maxLeft) left = Math.max(8, maxLeft);
-      return { left: left + "px", top: this.anchorRect.bottom + 4 + "px" };
+      let top = this.anchorRect.bottom + 4;
+      if (top + estimatedHeight > window.innerHeight - 8) {
+        top = Math.max(8, this.anchorRect.top - estimatedHeight - 4);
+      }
+      return { left: left + "px", top: top + "px" };
     },
     weeks() {
       const first = new Date(this.viewYear, this.viewMonth - 1, 1);

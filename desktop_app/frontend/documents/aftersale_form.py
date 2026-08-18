@@ -1,23 +1,34 @@
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
-from desktop_app.frontend.field_meta import FieldWidth, pack_fields
+from desktop_app.frontend.field_meta import FieldWidth, pack_fields, resolve_rows
 
 from .base import BaseDocumentForm
 
 ACTION_OPTIONS = ["Cập nhật thông tin", "Thay SIM", "Chuyển chủ quyền"]
 ATTACHMENT_ITEMS = [("has_id_attachment", "CCCD/CMND"), ("has_original_sim", "SIM gốc")]
 
-# (label, name, required, input_kind) for the plain fields -- shared with the
-# web bridge's schema resolver, same pattern as PERSON_FIELDS. "action" and
-# "attachments" (has_id_attachment/has_original_sim) are compound widgets,
-# not plain FieldInputs, so they aren't in this list -- see ACTION_OPTIONS/
-# ATTACHMENT_ITEMS above and the manual repack below, same as before.
+# Sentinel items for the 2 compound widgets, packed into this form's own
+# rows below -- not FIELDS entries, same pattern as PAYMENT_METHOD_ITEM.
+ACTION_ITEM = "action"
+ATTACHMENTS_ITEM = "attachments"
+
+# Only the free-text companion for the attachment choices is a plain field;
+# action and attachments are the two compound controls above.
 FIELDS = [
-    ("Số điện thoại phối hợp 1", "backup_phone_1", True, "number"),
     ("Giấy tờ khác (nêu rõ)", "other_attachment", False, "text"),
-    ("Số điện thoại phối hợp 2", "backup_phone_2", False, "number"),
 ]
+
+
+def resolve_aftersale_form_rows() -> dict:
+    """One compact row: requested service, supplied papers, optional other
+    paper description. Company and customer identities live in their tabs."""
+    items: list[tuple[object, FieldWidth]] = [
+        (ACTION_ITEM, FieldWidth.SHORT),
+        (ATTACHMENTS_ITEM, FieldWidth.SHORT),
+        ("other_attachment", FieldWidth.SHORT),
+    ]
+    return {"primary_rows": resolve_rows(items), "detail_rows": [], "has_detail": False}
 
 
 class AftersaleForm(BaseDocumentForm):
@@ -58,12 +69,11 @@ class AftersaleForm(BaseDocumentForm):
         for label_text, name, required, input_kind in FIELDS:
             self.add_field(label_text, name, required=required, input_kind=input_kind)
 
-        # Re-pack the primary row: action + attachments + phone together
-        # (3 SHORT slots, exact fit) instead of 3 separate almost-empty rows.
+        # One compact row, identical to the web layout.
         pack_fields(self.primary_grid, [
             (self.action_group, FieldWidth.SHORT),
             (self.attachments_group, FieldWidth.SHORT),
-            (self.fields["backup_phone_1"], FieldWidth.SHORT),
+            (self.fields["other_attachment"], FieldWidth.SHORT),
         ])
 
     def values(self) -> dict[str, str | bool]:

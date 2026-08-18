@@ -19,32 +19,24 @@ FIELDS = [
     ("Số hợp đồng", "source_contract_number", False, "number"),
     ("Ngày hợp đồng", "source_contract_date", False, "date"),
     ("Ngày Phiếu đăng ký dịch vụ", "registration_form_date", False, "date"),
-    ("Giờ chuyển quyền", "transfer_time", False, "text"),
+    ("Giờ chuyển quyền", "transfer_time", False, "number"),
     ("Ngày chuyển quyền có hiệu lực", "transfer_effective_date", True, "date"),
 ]
-# provider_representative ("Người đại diện Bên B ký") is intentionally NOT a
-# visible row -- by explicit request, only the 3 rows below. It still exists
-# as a ReportData field and still auto-fills from the company profile (see
-# WebBridge.on_document_type_changed), just with no editable field cluttering
-# this form; the docx's "Đại diện Bên B" signature still uses it.
+# Chữ ký Bên B là nội dung cố định trong mẫu Word, không phải trường nhập.
 
 
 def resolve_transfer_form_rows() -> dict:
-    """Bespoke, fixed layout for Transfer's own document fields -- by
-    explicit request, no "Thông tin chi tiết" disclosure here either.
+    """The Transfer form's own fields in their fixed semantic rows.
 
-    Row 1: Hình thức thanh toán, Số hợp đồng, Ngày hợp đồng (payment method
-    alongside the pre-existing service contract's own number + date -- a
-    date the shop must look up, never auto-filled). Row 2: Ngày Phiếu đăng
-    ký dịch vụ trả trước (also never auto-filled). Row 3: Giờ + Ngày chuyển
-    quyền -- the moment THIS transfer itself takes effect, which really is
-    "now" (see ReportData.transfer_time/transfer_effective_date defaults).
+    The web schema prepends the shared ``document_date`` field beside
+    payment method to complete row 1. Rows 2 and 3 stay identical in both
+    renderers.
     """
     items: list[tuple[object, FieldWidth]] = [
         (PAYMENT_METHOD_ITEM, FieldWidth.SHORT),
+        (ROW_BREAK, FieldWidth.SHORT),
         ("source_contract_number", FieldWidth.SHORT),
         ("source_contract_date", FieldWidth.SHORT),
-        (ROW_BREAK, FieldWidth.SHORT),
         ("registration_form_date", FieldWidth.SHORT),
         (ROW_BREAK, FieldWidth.SHORT),
         ("transfer_time", FieldWidth.SHORT),

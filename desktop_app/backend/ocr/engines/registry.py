@@ -21,7 +21,12 @@ class OCREngineRegistry:
         engines: list[BaseOCREngine] = [
             QREngine(),
             ChandraAPIEngine(self.config.chandra_api_url),
-            PaddleEngine(self.config.paddle_model_dir, self.config.paddle_confidence),
+            PaddleEngine(
+                self.config.paddle_model_dir,
+                self.config.paddle_confidence,
+                self.config.vietocr_weights_path,
+                self.config.vietocr_config_path,
+            ),
             TesseractEngine(),
         ]
         self._engines = {engine.key: engine for engine in engines}

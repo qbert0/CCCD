@@ -1,7 +1,10 @@
-from desktop_app.backend.domain.models import ReportData
+import re
 import unicodedata
+
+from desktop_app.backend.domain.models import ReportData
 from desktop_app.backend.validation.rules import (
-    FieldError, common_errors, party_required, person_errors, required_errors,
+    FieldError, common_errors, party_required, personal_information_required,
+    person_errors, required_errors,
 )
 
 
@@ -9,11 +12,23 @@ class TransferSchema:
     @staticmethod
     def required_paths(data: ReportData) -> list[str]:
         paths = ["document_date", "subscriber_number", "payment_method", "transfer_effective_date"]
-        paths += party_required("customer", data.customer)
-        paths += party_required("new_owner", data.new_owner)
-        for prefix, person in (("customer", data.customer), ("new_owner", data.new_owner)):
-            if person.entity_type == "Tổ chức":
-                paths += [f"{prefix}.date_of_birth", f"{prefix}.address", f"{prefix}.nationality"]
+        paths += (
+            [
+                "customer.organization_name",
+                "customer.headquarters_address",
+                "customer.business_registration_number",
+                *personal_information_required("customer"),
+            ]
+            if data.customer.entity_type == "Tổ chức"
+            else party_required("customer", data.customer)
+        )
+        paths += personal_information_required("new_owner")
+        if data.new_owner.entity_type == "Tổ chức":
+            paths += [
+                "new_owner.organization_name",
+                "new_owner.headquarters_address",
+                "new_owner.business_registration_number",
+            ]
         return paths
 
     @classmethod
@@ -25,10 +40,21 @@ class TransferSchema:
             errors.append(FieldError("source_contract_date", "Ngày hợp đồng là bắt buộc khi đã nhập số hợp đồng"))
         if data.source_contract_date.strip() and not data.source_contract_number.strip():
             errors.append(FieldError("source_contract_number", "Số hợp đồng là bắt buộc khi đã nhập ngày hợp đồng"))
-        errors += common_errors(data, ("source_contract_date", "registration_form_date", "transfer_effective_date"))
-        fields = {"id_number", "date_of_birth", "issue_date", "authorization_date"}
-        errors += person_errors("customer", data.customer, fields)
-        errors += person_errors("new_owner", data.new_owner, fields)
+        transfer_hour = str(data.transfer_time or "").strip()
+        if transfer_hour and (
+            not re.fullmatch(r"\d{1,2}", transfer_hour)
+            or not 0 <= int(transfer_hour) <= 23
+        ):
+            errors.append(FieldError("transfer_time", "Giờ chuyển quyền phải từ 0 đến 23"))
+        errors += common_errors(data, (
+            "source_contract_date", "registration_form_date", "transfer_effective_date",
+        ))
+        errors += person_errors(
+            "customer", data.customer, {"id_number", "date_of_birth", "issue_date"}
+        )
+        errors += person_errors(
+            "new_owner", data.new_owner, {"id_number", "date_of_birth", "issue_date"}
+        )
         current_id = "".join(char for char in data.customer.id_number if char.isdigit())
         new_id = "".join(char for char in data.new_owner.id_number if char.isdigit())
         if current_id and new_id and current_id == new_id:

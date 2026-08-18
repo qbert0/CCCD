@@ -157,10 +157,14 @@ def make_back() -> Image.Image:
     draw.text((60, 340), "Có giá trị đến / Date of expiry:", font=regular(22), fill=INK)
     draw.text((60, 370), EXPIRY_TEXT, font=bold(28), fill=INK)
 
+    # parser.py's mrz_name extraction takes the FIRST line containing "<<"
+    # and 3+ consecutive uppercase letters — the ID line below also matches
+    # that shape ("IDV", "VNM"), so the name line must be drawn first or it
+    # gets shadowed and full_name parses as garbage.
     mrz_lines = [
-        f"IDVNM{ID_NUMBER}8{OLD_ID_NUMBER}<<<<<<<<<<<2",
+        "NGUYEN<<VAN<TEST<<<<<<<<<<<<<<<<<<<<",
         "9901019M3601014VNM<<<<<<<<<<<<<<<",
-        "TEST<<NGUYEN<VAN<<<<<<<<<<<<<<<<<<<<",
+        f"IDVNM{ID_NUMBER}8{OLD_ID_NUMBER}<<<<<<<<<<<2",
     ]
     mrz_font = mono(34)
     y = HEIGHT - 200

@@ -17,6 +17,7 @@ CCCD.state = Vue.reactive({
   subscriber_number: "",
   customer: {},
   new_owner: {},
+  representative: {},
   // ...remaining ReportData fields (document_date, shop_name, shop_address,
   // shop_phone, staff_name, payment_method, service_action,
   // has_id_attachment, has_original_sim, notes, sim_serial, ...) are added
@@ -26,8 +27,10 @@ CCCD.state = Vue.reactive({
 
   layouts: {
     customer: { primary_rows: [], detail_rows: [], has_detail: false, allow_entity: false },
+    representative: { primary_rows: [], detail_rows: [], has_detail: false, allow_entity: false },
     new_owner: { primary_rows: [], detail_rows: [], has_detail: false, allow_entity: false },
     document: { common_rows: [], primary_rows: [], detail_rows: [], has_detail: false, notes_field: null },
+    sims: {},
   },
 
   ui: {
@@ -35,19 +38,26 @@ CCCD.state = Vue.reactive({
     documentFullTitle: "",
     tabs: {
       customerLabel: "Khách hàng",
+      representativeLabel: "Người đại diện",
       newOwnerLabel: "Chủ thuê bao mới",
       documentLabel: "Thông tin tài liệu",
+      simsLabel: "Danh sách SIM",
+      representativeTabVisible: false,
       newOwnerTabVisible: false,
+      simsTabVisible: false,
       newOwnerUploadVisible: false,
     },
     activeTab: "customer",
-    detailOpen: { customer: false, new_owner: false, document: false, profile: false },
+    detailOpen: { customer: false, representative: false, new_owner: false, document: false, profile: false },
     ocrPanelOpen: false,
     ocrRawText: { customer: "", new_owner: "" },
     errors: {}, // dotted ReportData path -> message
     upload: {
       customer: { front: null, back: null, status: "Chưa có ảnh", invalid: false, note: "", busy: false, progress: null },
       new_owner: { front: null, back: null, status: "Chưa có ảnh", invalid: false, note: "", busy: false, progress: null },
+      // Company Profile dialog's own "Người đại diện" intake card -- a
+      // session record, not case data, so it isn't reset by "Hồ sơ mới".
+      representative: { front: null, back: null, status: "Chưa có ảnh", invalid: false, note: "", busy: false, progress: null },
     },
     busy: false,
     statusMessage: "Sẵn sàng",
@@ -73,7 +83,10 @@ CCCD.getByPath = function (root, path) {
 CCCD.setByPath = function (root, path, value) {
   const parts = path.split(".");
   let obj = root;
-  for (let i = 0; i < parts.length - 1; i++) obj = obj[parts[i]];
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (obj[parts[i]] == null) obj[parts[i]] = /^\d+$/.test(parts[i + 1]) ? [] : {};
+    obj = obj[parts[i]];
+  }
   obj[parts[parts.length - 1]] = value;
 };
 
@@ -91,7 +104,7 @@ CCCD.mergeNonEmpty = function (target, fields) {
 CCCD.applyStatePatch = function (patch) {
   if (!patch) return;
   for (const [key, value] of Object.entries(patch)) {
-    if ((key === "customer" || key === "new_owner") && value && typeof value === "object") {
+    if ((key === "customer" || key === "new_owner" || key === "representative") && value && typeof value === "object") {
       Object.assign(CCCD.state[key], value);
     } else {
       CCCD.state[key] = value;

@@ -13,6 +13,8 @@ class OCRConfig:
     chandra_api_url: str
     paddle_model_dir: Path
     paddle_confidence: float
+    vietocr_weights_path: Path
+    vietocr_config_path: Path
 
     @classmethod
     def from_environment(cls) -> "OCRConfig":
@@ -31,9 +33,14 @@ class OCRConfig:
             confidence = float(os.getenv("CCCD_PADDLE_CONFIDENCE", "0.45"))
         except ValueError:
             confidence = 0.45
+        vietocr_dir = resource_root() / "runtime_models" / "vietocr"
+        configured_weights = os.getenv("CCCD_VIETOCR_WEIGHTS", "").strip()
+        configured_config = os.getenv("CCCD_VIETOCR_CONFIG", "").strip()
         return cls(
             engine_order=order,
             chandra_api_url=os.getenv("CCCD_OCR_API_URL", "").strip(),
             paddle_model_dir=model_dir,
             paddle_confidence=max(0.0, min(1.0, confidence)),
+            vietocr_weights_path=Path(configured_weights) if configured_weights else vietocr_dir / "vgg_transformer.pth",
+            vietocr_config_path=Path(configured_config) if configured_config else vietocr_dir / "vgg_transformer_config.yml",
         )

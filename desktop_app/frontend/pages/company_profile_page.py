@@ -12,7 +12,12 @@ from PyQt5.QtWidgets import (
 
 from desktop_app.backend.config import load_company_profile, save_company_profile
 from desktop_app.backend.domain.models import DocumentType, PersonData, ReportData
-from desktop_app.backend.validation.rules import party_required, person_errors, required_errors
+from desktop_app.backend.validation.rules import (
+    common_errors,
+    organization_information_required,
+    person_errors,
+    required_errors,
+)
 from desktop_app.frontend.components import PersonForm
 
 
@@ -80,17 +85,10 @@ class CompanyProfilePage(QDialog):
         person = self.form.data()
         person.entity_type = "Tổ chức"
         report = ReportData(document_type=DocumentType.TRANSFER, customer=person)
-        required = party_required("customer", person) + [
-            "customer.date_of_birth",
-            "customer.address",
-            "customer.nationality",
-        ]
+        required = organization_information_required("customer")
         errors = required_errors(report, required)
-        errors += person_errors(
-            "customer",
-            person,
-            {"id_number", "date_of_birth", "issue_date", "authorization_date"},
-        )
+        errors += common_errors(report, ("customer.business_registration_issue_date",), ())
+        errors += person_errors("customer", person, {"phone"})
         fields = self.form.field_map()
         for error in errors:
             field = fields.get(error.path)

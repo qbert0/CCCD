@@ -5,10 +5,12 @@ templates remain normal Word files: users can edit their layout and formatting a
 long as the ``{{ placeholder_name }}`` tokens are retained.
 """
 
+from copy import deepcopy
 from pathlib import Path
 
 from docx import Document
 from docx.enum.text import WD_BREAK
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Pt
 from docx.text.paragraph import Paragraph
@@ -118,36 +120,111 @@ def migrate_transfer() -> None:
 
 
 def migrate_aftersale() -> None:
-    source = ROOT / "desktop_app/data/source/original_documents/ck sau/CK Sau ban hang.docx"
     path = ROOT / "desktop_app/backend/documents/aftersale/00_MAU_CAM_KET_SAU_BAN_HANG.docx"
-    document = Document(source)
+    # The canonical file is intentionally the source: it contains the user's
+    # improved visual design.  The original document is only a layout reference
+    # and must never overwrite those edits.
+    document = Document(path)
     paragraphs = document.paragraphs
     values = {
-        3: "{{ aftersale_document_date_line }}",
-        5: "Cửa hàng: {{ shop_name }}",
-        6: "Địa chỉ: {{ shop_address }}",
-        7: "Điện thoại: {{ shop_phone }}",
-        11: "Họ và tên: {{ customer_name }}",
-        12: "Số CMND/CCCD: {{ customer_id_number }}    Ngày cấp: {{ customer_issue_date }}    Nơi cấp: {{ customer_issue_place }}",
-        13: "Địa chỉ: {{ customer_address }}",
-        14: "Điện thoại liên hệ cần thiết: {{ customer_phone }}",
+        3: "Ngày {{ aftersale_day }} tháng {{ aftersale_month }} năm {{ aftersale_year }}",
+        5: "Cửa hàng: {{ aftersale_shop_name }}",
+        6: "Địa chỉ: {{ aftersale_shop_address }}",
+        7: "Điện thoại: {{ aftersale_shop_phone }}",
+        11: "Họ và tên: {{ aftersale_customer_name }}",
+        12: (
+            "Số CMND/CCCD: {{ aftersale_customer_id_number }}    "
+            "Ngày cấp: {{ aftersale_customer_issue_date }}    "
+            "Nơi cấp: {{ aftersale_customer_issue_place }}"
+        ),
+        13: "Địa chỉ: {{ aftersale_customer_address }}",
+        14: "Điện thoại liên hệ cần thiết: {{ aftersale_customer_phone }}",
         15: "Giấy tờ kèm theo:",
-        16: "{{ attachment_checkboxes }}",
-        17: "{{ other_attachment_line }}",
+        16: "{{ id_attachment_mark }} CCCD/CMND    {{ sim_attachment_mark }} SIM gốc",
+        17: "{{ other_attachment_mark }} Giấy tờ khác (nêu rõ): {{ other_attachment_value }}",
         18: "",
-        22: "{{ update_information_choice }}",
-        23: "{{ update_information_commitment }}",
-        24: "{{ replace_sim_choice }}",
-        25: "{{ replace_sim_commitment }}",
-        26: "{{ transfer_choice }}",
-        27: "{{ aftersale_transfer_commitment }}",
-        29: "{{ aftersale_common_commitment }}",
-        31: "{{ backup_phone_commitment }}",
-        32: "",
+        22: "{{ update_information_mark }} Cập nhật thông tin",
+        23: (
+            "Tôi xin cam kết là chủ sở hữu của số điện thoại Vietnamobile: "
+            "{{ update_subscriber_number }}. Tôi đã cung cấp cho cửa hàng SIM gốc và cam kết "
+            "thuê bao không vướng bất kỳ tranh chấp nào."
+        ),
+        24: "{{ replace_sim_mark }} Thay SIM",
+        25: (
+            "Tôi xin cam kết là chủ sở hữu của số điện thoại Vietnamobile: "
+            "{{ replace_sim_subscriber_number }}. Trong trường hợp xảy ra bất kỳ tranh chấp "
+            "về việc thay SIM cho số thuê bao này, tôi cam đoan sẽ phối hợp với Vietnamobile "
+            "để giải quyết."
+        ),
+        26: "{{ transfer_mark }} Chuyển chủ quyền",
+        27: (
+            "Tôi đồng ý thanh lý Hợp đồng cung cấp và sử dụng dịch vụ thông tin di động mặt đất "
+            "Vietnamobile của thuê bao {{ transfer_subscriber_number }} và chuyển quyền sử dụng số "
+            "thuê bao này và dịch vụ điện thoại di động trả trước cho Ông/Bà "
+            "{{ transfer_new_owner_name }}, số CMND/CCCD {{ transfer_new_owner_id_number }}, "
+            "ngày cấp {{ transfer_new_owner_issue_date }}, nơi cấp "
+            "{{ transfer_new_owner_issue_place }} (“Chủ thuê bao mới”)."
+        ),
+        29: (
+            "Tôi ({{ requester_role_mark }} Người yêu cầu hoặc {{ new_owner_role_mark }} "
+            "Chủ thuê bao mới) là chủ sở hữu của số thuê bao {{ common_subscriber_number }}. "
+            "Tôi đã được nhân viên tư vấn đầy đủ về các quyền và nghĩa vụ của gói cước đi kèm "
+            "số thuê bao này và tôi đồng ý tiếp tục sử dụng và thực hiện các cam kết của gói "
+            "cước theo quy định của Vietnamobile."
+        ),
+        31: (
+            "Tôi đồng ý để Vietnamobile thu hồi lại số thuê bao vô điều kiện hoặc áp dụng các "
+            "biện pháp khác trong trường hợp tôi vi phạm điều khoản đã cam kết hoặc có bất kỳ "
+            "khiếu nại nào từ chủ thuê bao cũ và/hoặc bên thứ ba khác và Vietnamobile không liên "
+            "hệ được với tôi qua số điện thoại 1: {{ backup_phone_1_line }} hoặc số điện thoại 2: "
+            "{{ backup_phone_2_line }} trong vòng 24 giờ. Tôi cam đoan sẽ phối hợp với Vietnamobile "
+            "để giải quyết và chấp nhận quyết định cuối cùng của Vietnamobile."
+        ),
     }
     for index, value in values.items():
         set_text(paragraphs[index], value)
-    set_text_after_column_break(paragraphs[38], "GIAO DỊCH VIÊN\n{{ staff_name }}")
+
+    # Repair the last signature area against the original form.  The edited
+    # file accidentally joined "GIAO DỊCH VIÊN" to the previous caption and
+    # introduced a redundant two-column section.  The legal form has exactly
+    # three independent signature columns.
+    if len(paragraphs) >= 39 and "GIAO DỊCH VIÊN" in paragraphs[36].text:
+        set_text(paragraphs[33], "NGƯỜI YÊU CẦU")
+        set_text(paragraphs[34], "(Ký và ghi rõ họ tên)")
+        set_text_after_column_break(paragraphs[35], "CHỦ THUÊ BAO MỚI")
+        set_text(paragraphs[36], "(Ký và ghi rõ họ tên)")
+
+        dealer_heading_xml = deepcopy(paragraphs[35]._p)
+        paragraphs[36]._p.addnext(dealer_heading_xml)
+        dealer_heading = Paragraph(dealer_heading_xml, paragraphs[36]._parent)
+        set_text_after_column_break(dealer_heading, "GIAO DỊCH VIÊN\n{{ aftersale_staff_name }}")
+        set_text(paragraphs[37], "(Ký và ghi rõ họ tên)")
+
+        # Remove only the accidental paragraph-level section after signatures.
+        accidental_section = paragraphs[38]
+        if accidental_section._p.xpath("./w:pPr/w:sectPr"):
+            accidental_section._element.getparent().remove(accidental_section._element)
+    else:
+        dealer_heading = next(
+            (p for p in document.paragraphs if "GIAO DỊCH VIÊN" in p.text),
+            None,
+        )
+        if dealer_heading is not None:
+            set_text_after_column_break(
+                dealer_heading,
+                "GIAO DỊCH VIÊN\n{{ aftersale_staff_name }}",
+            )
+
+    final_section = document._element.body.sectPr
+    final_columns = final_section.find(qn("w:cols"))
+    if final_columns is None:
+        final_columns = OxmlElement("w:cols")
+        document_grid = final_section.find(qn("w:docGrid"))
+        if document_grid is None:
+            final_section.append(final_columns)
+        else:
+            document_grid.addprevious(final_columns)
+    final_columns.set(qn("w:num"), "3")
 
     # Word's original list numbering draws its own empty square.  The selected
     # square is data-driven now, so keeping numPr would render two checkboxes.
@@ -156,22 +233,8 @@ def migrate_aftersale() -> None:
         if properties is not None and properties.numPr is not None:
             properties.remove(properties.numPr)
 
-    # Long, reviewed customer data must still fit the one-page legal form.
-    # Only body runs are compacted; headings, logo, columns and footer retain
-    # the source template formatting.
-    for index in range(11, 40):
-        paragraph = paragraphs[index]
-        paragraph.paragraph_format.space_before = Pt(0)
-        paragraph.paragraph_format.space_after = Pt(0)
-        if index not in (20, 21, 28, 34, 36, 38):
-            paragraph.paragraph_format.line_spacing = 0.86
-        for run in paragraph.runs:
-            if index in (20, 21, 28, 34, 36, 38):
-                run.font.size = Pt(9)
-            else:
-                run.font.size = Pt(8.5)
-    for run in paragraphs[3].runs:
-        run.font.size = Pt(8.5)
+    # Do not normalize fonts/spacing here.  The canonical document is maintained
+    # visually in Word/LibreOffice, so migration must preserve that design.
     document.save(path)
 
 

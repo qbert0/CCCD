@@ -25,6 +25,25 @@ class ModelTest(unittest.TestCase):
         )
         self.assertTrue(any("chủ" in error.casefold() for error in data.validation_errors()))
 
+    def test_transfer_organization_subscriber_requires_only_three_extra_company_fields(self):
+        person = PersonData(
+            entity_type="Tổ chức",
+            full_name="Nguyễn Văn A",
+            id_number="001099999999",
+            issue_date="01/01/2021",
+            issue_place="Cục Cảnh sát QLHC về TTXH",
+            date_of_birth="01/01/1990",
+            nationality="Việt Nam",
+            address="Hà Nội",
+        )
+        data = ReportData(document_type=DocumentType.TRANSFER, new_owner=person)
+        paths = {error.path for error in self.registry.for_data(data).check(data)}
+        self.assertIn("new_owner.organization_name", paths)
+        self.assertIn("new_owner.headquarters_address", paths)
+        self.assertIn("new_owner.business_registration_number", paths)
+        self.assertNotIn("new_owner.business_registration_issue_date", paths)
+        self.assertNotIn("new_owner.business_registration_issue_place", paths)
+
     def test_aftersale_transfer_requires_new_owner(self):
         data = ReportData(
             document_type=DocumentType.AFTERSALE,
