@@ -23,6 +23,14 @@
       documentTabLayout() {
         return state.layouts.document;
       },
+      // Transfer shows a single intake card (visually where "customer"
+      // sits) but its images belong to the new_owner party -- mirrors
+      // HomePage._upload_card_for_target()/_start_primary_ocr() in the old
+      // PyQt UI: the widget position is fixed, the OCR target it feeds is
+      // not.
+      primaryUploadTarget() {
+        return state.document_type === "transfer" ? "new_owner" : "customer";
+      },
       tabsList() {
         const t = state.ui.tabs;
         return [
@@ -165,7 +173,7 @@
             <button class="btn btn--ghost" type="button">↻ Hồ sơ mới</button>
           </div>
 
-          <upload-card target="customer" />
+          <upload-card :target="primaryUploadTarget" />
           <upload-card v-if="state.ui.tabs.newOwnerUploadVisible" target="new_owner" />
 
           <div class="card card--ocr">
