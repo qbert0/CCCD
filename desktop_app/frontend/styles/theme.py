@@ -3,7 +3,7 @@
 from desktop_app.backend.paths import resource_path
 
 _CHEVRON_DOWN = resource_path("desktop_app", "assets", "chevron-down.png").as_posix()
-_CHECKMARK = resource_path("desktop_app", "assets", "checkmark.png").as_posix()
+_CHECKMARK = resource_path("desktop_app", "assets", "checkmark-line.svg").as_posix()
 
 APP_STYLE = """
 QWidget {
@@ -27,14 +27,6 @@ QMainWindow, #pageRoot { background: #f7f7f4; }
     letter-spacing: -0.3px;
 }
 #headerCard #mutedText { color: #807d72; font-size: 13px; }
-#engineBadge {
-    color: #5a5852;
-    background: #e6e5e0;
-    border-radius: 10px;
-    padding: 5px 10px;
-    font-family: "JetBrains Mono", "Noto Sans Mono", monospace;
-    font-size: 10px;
-}
 
 #uploadCard, #ocrCard, #contentCard {
     background: #ffffff;
@@ -69,6 +61,7 @@ QMainWindow, #pageRoot { background: #f7f7f4; }
 }
 #dialogTitle { color: #26251e; font-size: 24px; font-weight: 400; letter-spacing: -0.3px; }
 #fieldLabel { color: #5a5852; font-size: 12px; font-weight: 600; }
+#fieldHelper { color: #a09c92; font-size: 11px; }
 #fieldError { color: #cf2d56; font-size: 11px; }
 #mutedText { color: #807d72; font-size: 12px; }
 #microText { color: #a09c92; font-size: 10px; }
@@ -81,7 +74,13 @@ QMainWindow, #pageRoot { background: #f7f7f4; }
     padding: 4px 8px;
     font-size: 10px;
 }
-#uploadStatus[invalid="true"] { color: #cf2d56; background: #fff0f3; }
+#uploadStatus[invalid="true"] { color: #cf2d56; background: #fff9fa; }
+#scanProgress {
+    background: #e6e5e0;
+    border: 0;
+    border-radius: 2px;
+}
+#scanProgress::chunk { background: #f54e00; border-radius: 2px; }
 
 QLineEdit, QComboBox, QTextEdit {
     background: #ffffff;
@@ -132,8 +131,8 @@ QCheckBox::indicator {
 QCheckBox::indicator:hover { border-color: #807d72; }
 QCheckBox::indicator:checked {
     image: url(__CHECKMARK__);
-    background: #26251e;
-    border-color: #26251e;
+    background: #ffffff;
+    border-color: #807d72;
 }
 
 QPushButton {
@@ -151,17 +150,14 @@ QPushButton:pressed { background: #efeee8; }
 #primaryButton { background: #f54e00; color: #ffffff; border-color: #f54e00; }
 #primaryButton:hover { background: #e2480a; border-color: #e2480a; }
 #primaryButton:pressed { background: #d04200; border-color: #d04200; }
-#secondaryButton, #neutralButton { background: #ffffff; color: #26251e; border-color: #cfcdc4; }
-#successButton { background: #26251e; color: #f7f7f4; border-color: #26251e; }
+#secondaryButton { background: #ffffff; color: #26251e; border-color: #cfcdc4; }
 #refreshButton {
     background: transparent;
     color: #5a5852;
     border-color: #cfcdc4;
 }
 #refreshButton:pressed { background: #efeee8; }
-#successButton:hover { background: #3a382e; border-color: #3a382e; }
-#successButton:pressed { background: #171610; border-color: #171610; }
-#primaryButton:disabled, #secondaryButton:disabled, #neutralButton:disabled, #successButton:disabled {
+#primaryButton:disabled, #secondaryButton:disabled {
     background: #efeee8;
     color: #a09c92;
     border-color: #e6e5e0;
@@ -201,7 +197,7 @@ QPushButton:pressed { background: #efeee8; }
     padding: 7px 9px;
     font-size: 11px;
 }
-#uploadNote[invalid="true"] { color: #a3183d; background: #fff0f3; }
+#uploadNote[invalid="true"] { color: #cf2d56; background: #fff9fa; }
 #sideBadge {
     color: #5a5852;
     background: #e6e5e0;

@@ -24,6 +24,7 @@ class FieldInput(QWidget):
         required: bool = False,
         placeholder: str = "",
         input_kind: str = "text",
+        helper: str = "",
         parent=None,
     ):
         super().__init__(parent)
@@ -37,7 +38,10 @@ class FieldInput(QWidget):
         self.label = QLabel()
         self.label.setObjectName("fieldLabel")
         self.input = QLineEdit()
-        self.input.setPlaceholderText(placeholder or f"Nhập {label.casefold()}")
+        # Placeholder is a format hint, not a label stand-in: for free text
+        # it echoes the field name, but a date field's own name never tells
+        # you the expected format, so it shows the pattern instead.
+        self.input.setPlaceholderText(placeholder or (DATE_FORMAT.casefold() if input_kind == "date" else f"Nhập {label.casefold()}"))
         self.input.textChanged.connect(self._on_changed)
         if input_kind == "number":
             self.input.setValidator(QRegularExpressionValidator(QRegularExpression(r"[0-9 ]*"), self.input))
@@ -49,12 +53,18 @@ class FieldInput(QWidget):
             self.input.setCursor(Qt.PointingHandCursor)
             self.input.installEventFilter(self)
 
+        self.helper = QLabel(helper)
+        self.helper.setObjectName("fieldHelper")
+        self.helper.setWordWrap(True)
+        self.helper.setVisible(bool(helper))
+
         self.error = QLabel()
         self.error.setObjectName("fieldError")
         self.error.setVisible(False)
         self.error.setWordWrap(True)
         layout.addWidget(self.label)
         layout.addWidget(self.input)
+        layout.addWidget(self.helper)
         layout.addWidget(self.error)
         self.set_required(required)
 
@@ -120,6 +130,10 @@ class FieldInput(QWidget):
     def set_error(self, message: str) -> None:
         self.error.setText(message)
         self.error.setVisible(True)
+        # The error message replaces the helper hint rather than stacking
+        # under it -- two gray/red lines competing under one input reads as
+        # noise, and the error is strictly the more urgent of the two.
+        self.helper.setVisible(False)
         self.input.setProperty("invalid", True)
         self.input.style().unpolish(self.input)
         self.input.style().polish(self.input)
@@ -127,6 +141,7 @@ class FieldInput(QWidget):
     def clear_error(self) -> None:
         self.error.clear()
         self.error.setVisible(False)
+        self.helper.setVisible(bool(self.helper.text()))
         self.input.setProperty("invalid", False)
         self.input.style().unpolish(self.input)
         self.input.style().polish(self.input)

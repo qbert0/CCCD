@@ -1,3 +1,4 @@
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QComboBox, QLabel, QVBoxLayout, QWidget
 
 from .base import BaseDocumentForm
@@ -19,6 +20,7 @@ class TransferForm(BaseDocumentForm):
         label.setObjectName("fieldLabel")
         self.payment_method = QComboBox()
         self.payment_method.addItems(["Trả trước", "Trả sau"])
+        self.payment_method.setCursor(Qt.PointingHandCursor)
         payment_layout.addWidget(label)
         payment_layout.addWidget(self.payment_method)
 

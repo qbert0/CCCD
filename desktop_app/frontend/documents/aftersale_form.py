@@ -1,3 +1,4 @@
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from desktop_app.frontend.field_meta import FieldWidth, pack_fields
@@ -18,6 +19,7 @@ class AftersaleForm(BaseDocumentForm):
         label.setObjectName("fieldLabel")
         self.action = QComboBox()
         self.action.addItems(["Cập nhật thông tin", "Thay SIM", "Chuyển chủ quyền"])
+        self.action.setCursor(Qt.PointingHandCursor)
         action_layout.addWidget(label)
         action_layout.addWidget(self.action)
 
@@ -32,7 +34,9 @@ class AftersaleForm(BaseDocumentForm):
         checks.setSpacing(10)
         self.has_id = QCheckBox("CCCD/CMND")
         self.has_id.setChecked(True)
+        self.has_id.setCursor(Qt.PointingHandCursor)
         self.has_sim = QCheckBox("SIM gốc")
+        self.has_sim.setCursor(Qt.PointingHandCursor)
         checks.addWidget(self.has_id)
         checks.addWidget(self.has_sim)
         attachments_layout.addLayout(checks)

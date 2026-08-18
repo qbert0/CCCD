@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QPixmap
-from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
+from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QProgressBar, QVBoxLayout
 
 from desktop_app.backend.ocr import CardSide, OCRFileResult
 
@@ -151,6 +151,16 @@ class ImageUploadCard(QFrame):
         self.preview_label.hide()
         layout.addWidget(self.preview_label)
 
+        # Determinate progress bar, not a spinner: the moment scanning starts
+        # we already know the total file count, so "1/2 ảnh" is a known
+        # value with a track to fill -- not open-ended work.
+        self.scan_progress = QProgressBar()
+        self.scan_progress.setObjectName("scanProgress")
+        self.scan_progress.setTextVisible(False)
+        self.scan_progress.setFixedHeight(4)
+        self.scan_progress.hide()
+        layout.addWidget(self.scan_progress)
+
         previews = QHBoxLayout()
         previews.setSpacing(10)
         self.front_zone = ImagePreviewSlot(CardSide.FRONT)
@@ -221,9 +231,13 @@ class ImageUploadCard(QFrame):
     def set_scan_progress(self, done: int, total: int) -> None:
         self.preview_label.setText(f"ĐANG NHẬN DIỆN ẢNH… {done}/{total}")
         self.preview_label.show()
+        self.scan_progress.setRange(0, total)
+        self.scan_progress.setValue(done)
+        self.scan_progress.show()
 
     def clear_scan_progress(self) -> None:
         self.preview_label.setText("ẢNH ĐÃ NHẬN DIỆN")
+        self.scan_progress.hide()
         self._update_summary()
 
     def _update_summary(self) -> None:

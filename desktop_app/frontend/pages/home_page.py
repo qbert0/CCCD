@@ -181,6 +181,7 @@ class HomePage(QMainWindow):
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(14)
         self.document_combo = QComboBox()
+        self.document_combo.setCursor(Qt.PointingHandCursor)
         self.document_combo.setMinimumWidth(420)
         self.document_combo.addItem("Chọn biểu mẫu", "")
         for document_type, name in DOCUMENT_SHORT_NAMES.items():
@@ -199,15 +200,29 @@ class HomePage(QMainWindow):
         self.new_owner_index = self.tabs.addTab(self._scroll(self.new_owner_tab), "Chủ thuê bao mới")
         self.document_index = self.tabs.addTab(self._scroll(self.document_tab), "Thông tin tài liệu")
         layout.addWidget(self.tabs, 1)
-        self.document_empty_space = QLabel(
-            "Chưa chọn biểu mẫu"
-            '<div style="font-weight:400;font-size:13px;color:#a09c92;padding-top:6px;">'
-            "Chọn một loại tài liệu ở trên để bắt đầu điền thông tin"
-            "</div>"
-        )
-        self.document_empty_space.setObjectName("emptyState")
-        self.document_empty_space.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.document_empty_space, 1)
+
+        # Two real labels, not one label with an inline-styled <div>: the
+        # hint's color/size come from #emptyStateHint in theme.py, same as
+        # every other muted-caption text -- an inline style here would drift
+        # from that shared token the moment either one changes.
+        self.document_empty_space = QWidget()
+        empty_layout = QVBoxLayout(self.document_empty_space)
+        empty_layout.setContentsMargins(0, 0, 0, 0)
+        empty_layout.setSpacing(6)
+        empty_title = QLabel("Chưa chọn biểu mẫu")
+        empty_title.setObjectName("emptyState")
+        empty_title.setAlignment(Qt.AlignCenter)
+        empty_hint = QLabel("Chọn một loại tài liệu ở trên để bắt đầu điền thông tin")
+        empty_hint.setObjectName("emptyStateHint")
+        empty_hint.setAlignment(Qt.AlignCenter)
+        empty_layout.addWidget(empty_title)
+        empty_layout.addWidget(empty_hint)
+        # Alignment (not just stretch) here: a bare stretch=1 would expand
+        # this container to fill the whole space top-anchored, losing the
+        # vertical centering the single old QLabel got for free from its own
+        # AlignCenter -- Qt.AlignCenter keeps the container at its natural
+        # size and centers it instead.
+        layout.addWidget(self.document_empty_space, 1, Qt.AlignCenter)
 
         review_actions = QHBoxLayout()
         review_actions.setSpacing(10)

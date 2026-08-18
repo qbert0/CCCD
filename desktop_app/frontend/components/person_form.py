@@ -112,6 +112,7 @@ class PersonForm(QWidget):
         self.entity_label.setObjectName("fieldLabel")
         self.entity_type = QComboBox()
         self.entity_type.addItems(["Cá nhân", "Tổ chức"])
+        self.entity_type.setCursor(Qt.PointingHandCursor)
         self.entity_type.currentTextChanged.connect(self._entity_type_changed)
         # Only two short words -- no need to stretch this across the whole
         # form width like the text fields below it.
@@ -152,7 +153,8 @@ class PersonForm(QWidget):
 
         self.fields: dict[str, FieldInput] = {}
         for label, name, input_kind in PERSON_FIELDS:
-            field = FieldInput(label, f"{path_prefix}.{name}", input_kind=input_kind)
+            helper = "CCCD: 12 số · CMND: 9-12 số · Hộ chiếu: chữ và số" if name == "id_number" else ""
+            field = FieldInput(label, f"{path_prefix}.{name}", input_kind=input_kind, helper=helper)
             self.fields[name] = field
         self.fields["nationality"].set_value("Việt Nam")
         self.fields["issue_place"].set_value("Cục Cảnh sát QLHC về TTXH")
