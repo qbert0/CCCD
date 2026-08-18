@@ -48,6 +48,10 @@ PERSON_FIELDS = [
     ("Ngày giấy ủy quyền", "authorization_date", "date"),
 ]
 
+PERSON_FIELD_HELPERS = {
+    "id_number": "CCCD: 12 số · CMND: 9-12 số · Hộ chiếu: chữ và số",
+}
+
 
 # Packing order for the primary grid -- deliberately NOT PERSON_FIELDS order:
 # groups fields that logically belong together onto the same row. Organization
@@ -275,8 +279,9 @@ class PersonForm(QWidget):
 
         self.fields: dict[str, FieldInput] = {}
         for label, name, input_kind in PERSON_FIELDS:
-            helper = "CCCD: 12 số · CMND: 9-12 số · Hộ chiếu: chữ và số" if name == "id_number" else ""
-            field = FieldInput(label, f"{path_prefix}.{name}", input_kind=input_kind, helper=helper)
+            field = FieldInput(
+                label, f"{path_prefix}.{name}", input_kind=input_kind, helper=PERSON_FIELD_HELPERS.get(name, "")
+            )
             self.fields[name] = field
         self.fields["nationality"].set_value("Việt Nam")
         self.fields["issue_place"].set_value("Cục Cảnh sát QLHC về TTXH")
