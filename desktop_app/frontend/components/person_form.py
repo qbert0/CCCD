@@ -11,8 +11,9 @@ from desktop_app.frontend.field_meta import (
     ROW_BREAK,
     FieldTier,
     FieldWidth,
-    pack_fields,
     person_field_meta,
+    place_rows,
+    resolve_rows,
 )
 
 from .field_input import FieldInput
@@ -75,6 +76,127 @@ DETAIL_PACK_ORDER = [
     "other_contact", "foreign_country", ROW_BREAK,
     "business_registration_issue_place", "business_registration_issue_date",
 ]
+
+
+ENTITY_TYPE_OPTIONS = ["Cá nhân", "Tổ chức"]
+ORGANIZATION_ONLY_FIELDS = {
+    "organization_name", "headquarters_address", "business_registration_number",
+    "business_registration_issue_place", "business_registration_issue_date",
+    "representative_name", "representative_position", "authorization_number", "authorization_date",
+}
+PERSONAL_ONLY_FIELDS = {"full_name"}
+# Sentinel item name standing in for the compound entity_type selector in a
+# resolved row -- not a PERSON_FIELDS entry, so callers must special-case it
+# rather than looking it up in person_field_meta().
+ENTITY_TYPE_ITEM = "entity_type"
+
+
+def resolve_person_form(document_type: DocumentType, role: str, entity_type: str) -> dict:
+    """Pure computation of a PersonForm's visible/required fields and packed
+    row layout for (document_type, role, entity_type) -- no live field VALUES
+    involved. This is the single source of truth for PersonForm.configure()/
+    _refresh_visibility()'s branching: both the QWidget PersonForm below and
+    the web bridge's schema resolver call this directly, so the PyQt UI and
+    the web UI can never disagree on which fields show, which are required,
+    or how they pack into rows.
+
+    Returns {"allow_entity", "effective_entity_type", "visible": set[str],
+    "required": dict[str, bool], "primary_rows", "detail_rows", "has_detail"}.
+    """
+    allow_entity = document_type in {DocumentType.TRANSFER, DocumentType.PREPAID_CONTRACT}
+    effective_entity_type = entity_type if allow_entity else "Cá nhân"
+
+    if document_type == DocumentType.BEAUTIFUL_NUMBER:
+        base_visible = {"full_name", "id_number"}
+        base_required = set(base_visible)
+    elif document_type == DocumentType.AFTERSALE:
+        if role == "new_owner":
+            base_visible = {"full_name", "id_number", "issue_date", "issue_place"}
+        else:
+            base_visible = {"full_name", "id_number", "issue_date", "issue_place", "address", "phone"}
+        base_required = set(base_visible)
+    elif document_type == DocumentType.PREPAID_CONTRACT:
+        base_visible = {
+            "full_name", "id_number", "issue_date", "issue_place", "date_of_birth",
+            "address", "phone", "email", "other_contact", "nationality", "foreign_country",
+            "organization_name", "headquarters_address", "business_registration_number",
+            "business_registration_issue_place", "business_registration_issue_date",
+            "representative_name", "representative_position", "authorization_number",
+            "authorization_date",
+        }
+        base_required = {
+            "id_number", "issue_date", "issue_place", "date_of_birth",
+            "address", "nationality", "phone",
+        }
+    else:
+        base_visible = {
+            "full_name", "id_number", "issue_date", "issue_place", "date_of_birth",
+            "address", "nationality", "organization_name", "headquarters_address",
+            "business_registration_number", "representative_name", "representative_position",
+            "authorization_number", "authorization_date",
+        }
+        base_required = {
+            "id_number", "issue_date", "issue_place", "date_of_birth",
+            "address", "nationality",
+        }
+
+    organization = effective_entity_type == "Tổ chức"
+    visible_names: set[str] = set()
+    required_map: dict[str, bool] = {}
+    for label, name, _kind in PERSON_FIELDS:
+        visible = name in base_visible
+        if organization and name in PERSONAL_ONLY_FIELDS:
+            visible = False
+        if not organization and name in ORGANIZATION_ONLY_FIELDS:
+            visible = False
+        if organization:
+            organization_required = {
+                "organization_name", "headquarters_address", "business_registration_number", "representative_name"
+            }
+            organization_required |= {"id_number", "issue_date", "issue_place", "date_of_birth"}
+            if document_type == DocumentType.TRANSFER:
+                organization_required |= {"address", "nationality"}
+            if document_type == DocumentType.PREPAID_CONTRACT:
+                organization_required |= {
+                    "business_registration_issue_place", "business_registration_issue_date",
+                    "phone", "representative_position",
+                }
+            required = name in organization_required
+        else:
+            required = name in base_required or name == "full_name"
+        required_map[name] = required and visible
+        if visible:
+            visible_names.add(name)
+
+    primary_items: list[tuple[object, FieldWidth]] = []
+    if allow_entity:
+        primary_items.append((ENTITY_TYPE_ITEM, FieldWidth.SHORT))
+        if "organization_name" not in visible_names:
+            primary_items.append((ROW_BREAK, FieldWidth.SHORT))
+    for name in PRIMARY_PACK_ORDER:
+        if name is ROW_BREAK:
+            primary_items.append((ROW_BREAK, FieldWidth.SHORT))
+        elif name in visible_names:
+            primary_items.append((name, person_field_meta(name).width))
+
+    detail_items: list[tuple[object, FieldWidth]] = []
+    has_detail = False
+    for name in DETAIL_PACK_ORDER:
+        if name is ROW_BREAK:
+            detail_items.append((ROW_BREAK, FieldWidth.SHORT))
+        elif name in visible_names:
+            detail_items.append((name, person_field_meta(name).width))
+            has_detail = True
+
+    return {
+        "allow_entity": allow_entity,
+        "effective_entity_type": effective_entity_type,
+        "visible": visible_names,
+        "required": required_map,
+        "primary_rows": resolve_rows(primary_items),
+        "detail_rows": resolve_rows(detail_items),
+        "has_detail": has_detail,
+    }
 
 
 def _grid(spacing_v: int = 11) -> QGridLayout:
@@ -163,50 +285,15 @@ class PersonForm(QWidget):
     def configure(self, document_type: DocumentType, role: str) -> None:
         self._document_type = document_type
         self._role = role
-        allow_entity = document_type in {DocumentType.TRANSFER, DocumentType.PREPAID_CONTRACT}
-        self._allow_entity = allow_entity
-        self.entity_label.setVisible(allow_entity)
-        self.entity_type.setVisible(allow_entity)
-        self.entity_group.setVisible(allow_entity)
-        if not allow_entity:
-            self.entity_type.setCurrentText("Cá nhân")
-
-        if document_type == DocumentType.BEAUTIFUL_NUMBER:
-            visible = {"full_name", "id_number"}
-            required = set(visible)
-        elif document_type == DocumentType.AFTERSALE:
-            if role == "new_owner":
-                visible = {"full_name", "id_number", "issue_date", "issue_place"}
-            else:
-                visible = {"full_name", "id_number", "issue_date", "issue_place", "address", "phone"}
-            required = set(visible)
-        elif document_type == DocumentType.PREPAID_CONTRACT:
-            visible = {
-                "full_name", "id_number", "issue_date", "issue_place", "date_of_birth",
-                "address", "phone", "email", "other_contact", "nationality", "foreign_country",
-                "organization_name", "headquarters_address", "business_registration_number",
-                "business_registration_issue_place", "business_registration_issue_date",
-                "representative_name", "representative_position", "authorization_number",
-                "authorization_date",
-            }
-            required = {
-                "id_number", "issue_date", "issue_place", "date_of_birth",
-                "address", "nationality", "phone",
-            }
-        else:
-            visible = {
-                "full_name", "id_number", "issue_date", "issue_place", "date_of_birth",
-                "address", "nationality", "organization_name", "headquarters_address",
-                "business_registration_number", "representative_name", "representative_position",
-                "authorization_number", "authorization_date",
-            }
-            required = {
-                "id_number", "issue_date", "issue_place", "date_of_birth",
-                "address", "nationality",
-            }
-        self._visible_names = visible
-        self._required_names = required
-        self._refresh_visibility()
+        resolved = resolve_person_form(document_type, role, self.entity_type.currentText())
+        self._allow_entity = resolved["allow_entity"]
+        self.entity_label.setVisible(self._allow_entity)
+        self.entity_type.setVisible(self._allow_entity)
+        self.entity_group.setVisible(self._allow_entity)
+        if self.entity_type.currentText() != resolved["effective_entity_type"]:
+            self.entity_type.setCurrentText(resolved["effective_entity_type"])
+            return  # setCurrentText triggers _entity_type_changed -> _refresh_visibility
+        self._refresh_visibility(resolved)
 
     def _entity_type_changed(self) -> None:
         self._refresh_visibility()
@@ -216,67 +303,23 @@ class PersonForm(QWidget):
         self._detail_container.setVisible(expanded)
         self.detail_toggle.setText(("▾ " if expanded else "▸ ") + "Thông tin chi tiết")
 
-    def _refresh_visibility(self) -> None:
-        organization = self.entity_type.currentText() == "Tổ chức"
-        organization_only = {
-            "organization_name", "headquarters_address", "business_registration_number",
-            "business_registration_issue_place", "business_registration_issue_date",
-            "representative_name", "representative_position", "authorization_number", "authorization_date",
-        }
-        personal_name = {"full_name"}
-        visible_names: set[str] = set()
+    def _refresh_visibility(self, resolved: dict | None = None) -> None:
+        if resolved is None:
+            resolved = resolve_person_form(self._document_type, self._role, self.entity_type.currentText())
+        visible_names = resolved["visible"]
         for name, field in self.fields.items():
-            visible = name in self._visible_names
-            if organization and name in personal_name:
-                visible = False
-            if not organization and name in organization_only:
-                visible = False
+            visible = name in visible_names
             field.setVisible(visible)
-            if organization:
-                organization_required = {
-                    "organization_name", "headquarters_address", "business_registration_number", "representative_name"
-                }
-                organization_required |= {"id_number", "issue_date", "issue_place", "date_of_birth"}
-                if self._document_type == DocumentType.TRANSFER:
-                    organization_required |= {"address", "nationality"}
-                if self._document_type == DocumentType.PREPAID_CONTRACT:
-                    organization_required |= {
-                        "business_registration_issue_place", "business_registration_issue_date",
-                        "phone", "representative_position",
-                    }
-                required = name in organization_required
-            else:
-                required = name in self._required_names or name == "full_name"
-            field.set_required(required and visible)
-            if visible:
-                visible_names.add(name)
+            field.set_required(resolved["required"].get(name, False))
 
-        primary_items: list[tuple[QWidget | None, FieldWidth]] = []
-        if self._allow_entity:
-            primary_items.append((self.entity_group, FieldWidth.SHORT))
-            if "organization_name" not in visible_names:
-                # Individual case: organization_name isn't there to share the
-                # row, and full_name belongs with id_number instead -- so
-                # entity_group gets its own row here.
-                primary_items.append((ROW_BREAK, FieldWidth.SHORT))
-        for name in PRIMARY_PACK_ORDER:
-            if name is ROW_BREAK:
-                primary_items.append((ROW_BREAK, FieldWidth.SHORT))
-            elif name in visible_names:
-                primary_items.append((self.fields[name], person_field_meta(name).width))
-        pack_fields(self.primary_grid, primary_items)
+        def _as_widget_rows(rows: list[list[tuple[object, int]]]) -> list[list[tuple[QWidget, int]]]:
+            widget = lambda item: self.entity_group if item is ENTITY_TYPE_ITEM else self.fields[item]
+            return [[(widget(item), span) for item, span in row] for row in rows]
 
-        detail_items: list[tuple[QWidget | None, FieldWidth]] = []
-        has_detail = False
-        for name in DETAIL_PACK_ORDER:
-            if name is ROW_BREAK:
-                detail_items.append((ROW_BREAK, FieldWidth.SHORT))
-            elif name in visible_names:
-                detail_items.append((self.fields[name], person_field_meta(name).width))
-                has_detail = True
-        pack_fields(self.detail_grid, detail_items)
-        self.detail_toggle.setVisible(has_detail)
-        if not has_detail:
+        place_rows(self.primary_grid, _as_widget_rows(resolved["primary_rows"]))
+        place_rows(self.detail_grid, _as_widget_rows(resolved["detail_rows"]))
+        self.detail_toggle.setVisible(resolved["has_detail"])
+        if not resolved["has_detail"]:
             self.detail_toggle.setChecked(False)
         self.expand_detail_if_has_content()
 

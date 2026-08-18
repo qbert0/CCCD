@@ -144,13 +144,64 @@ def persistent_document_field_names() -> list[str]:
 _SPAN = {FieldWidth.SHORT: 1, FieldWidth.MEDIUM: 2, FieldWidth.LONG: GRID_COLUMNS}
 
 
+def resolve_rows(items: list[tuple[object, FieldWidth]]) -> list[list[tuple[object, int]]]:
+    """Pure packing algorithm, with no QGridLayout/QWidget involved: lay items
+    left-to-right, top-to-bottom on a GRID_COLUMNS-wide grid, each spanning 1
+    column (SHORT), 2 (MEDIUM) or the full row (LONG), wrapping whenever an
+    item would overflow the current row. An item equal to ROW_BREAK (None)
+    renders nothing and just forces the rest of the current row to stay empty
+    — for grouping fields that would otherwise get greedily packed with an
+    unrelated neighbor.
+
+    Returns rows of (item, span) pairs. This is the single source of truth
+    for the packing rules — both `pack_fields()` below (the PyQt QGridLayout
+    adapter) and the web bridge's schema resolver call this directly, so the
+    two view layers can never disagree on how fields wrap into rows."""
+    rows: list[list[tuple[object, int]]] = []
+    row: list[tuple[object, int]] = []
+    col = 0
+    for item, width in items:
+        if item is ROW_BREAK:
+            if col != 0:
+                rows.append(row)
+                row = []
+                col = 0
+            continue
+        span = _SPAN[width]
+        if col + span > GRID_COLUMNS:
+            rows.append(row)
+            row = []
+            col = 0
+        row.append((item, span))
+        col += span
+        if col >= GRID_COLUMNS:
+            rows.append(row)
+            row = []
+            col = 0
+    if row:
+        rows.append(row)
+    return rows
+
+
+def place_rows(grid: QGridLayout, rows: list[list[tuple[QWidget, int]]]) -> None:
+    """Place already-resolved rows (as returned by `resolve_rows()`) onto
+    `grid` directly, with no re-resolution -- for callers that resolved rows
+    once (e.g. against field-path strings) and now have the real QWidgets to
+    drop into those same cells, without running the packing algorithm twice.
+
+    Always clears every previous placement first, same reasoning as
+    `pack_fields()` below."""
+    while grid.count():
+        grid.takeAt(0)
+    for row_index, row in enumerate(rows):
+        col = 0
+        for widget, span in row:
+            grid.addWidget(widget, row_index, col, 1, span)
+            col += span
+
+
 def pack_fields(grid: QGridLayout, items: list[tuple[QWidget | None, FieldWidth]]) -> None:
-    """Lay widgets left-to-right, top-to-bottom on a GRID_COLUMNS-wide grid,
-    each spanning 1 column (SHORT), 2 (MEDIUM) or the full row (LONG),
-    wrapping to the next row whenever a widget would overflow the current
-    one. An item whose widget is ROW_BREAK (None) renders nothing and just
-    forces the rest of the current row to stay empty — for grouping fields
-    that would otherwise get greedily packed with an unrelated neighbor.
+    """Lay widgets on `grid` following `resolve_rows()`'s packing rules.
 
     Called repeatedly on the same grid as visibility changes (entity type,
     document type, ...), so it always clears every previous placement first
@@ -159,20 +210,8 @@ def pack_fields(grid: QGridLayout, items: list[tuple[QWidget | None, FieldWidth]
     cell later ends up visually overlapping it."""
     while grid.count():
         grid.takeAt(0)
-    row = 0
-    col = 0
-    for widget, width in items:
-        if widget is ROW_BREAK:
-            if col != 0:
-                row += 1
-                col = 0
-            continue
-        span = _SPAN[width]
-        if col + span > GRID_COLUMNS:
-            row += 1
-            col = 0
-        grid.addWidget(widget, row, col, 1, span)
-        col += span
-        if col >= GRID_COLUMNS:
-            row += 1
-            col = 0
+    for row_index, row in enumerate(resolve_rows(items)):
+        col = 0
+        for widget, span in row:
+            grid.addWidget(widget, row_index, col, 1, span)
+            col += span
