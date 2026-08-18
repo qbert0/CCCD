@@ -1,0 +1,8 @@
+# uv --overrides file: paddleocr==2.9.1 and vietocr==0.3.13 each hard-pin a
+# different exact albumentations version, even though neither actually calls
+# into it from the inference paths this app uses (paddleocr.ocr(),
+# vietocr Predictor.predict() — albumentations is only used by each
+# library's own *training* pipeline). Pin to the version already verified
+# to work with both at runtime so `uv pip install -r requirements.txt`
+# resolves instead of reporting the two pins as unsatisfiable.
+albumentations==1.4.2

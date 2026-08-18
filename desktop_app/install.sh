@@ -28,7 +28,21 @@ fi
 
 UV_CACHE_DIR="$cache_dir" uv pip install \
     --python "$(venv_python)" \
-    -r "$app_dir/requirements.txt"
+    -r "$app_dir/requirements.txt" \
+    --overrides "$app_dir/overrides.txt"
+
+# VietOCR's pretrained weights (~150MB) are too large for a normal git blob
+# (GitHub's 100MB hard limit), unlike the small PaddleOCR det/rec/cls models
+# that are committed directly — so they're fetched once here instead and
+# cached under runtime_models/, exactly where OCRConfig expects to find them.
+vietocr_dir="$project_dir/runtime_models/vietocr"
+vietocr_weights="$vietocr_dir/vgg_transformer.pth"
+if [[ ! -f "$vietocr_weights" ]]; then
+    echo "Đang tải trọng số VietOCR (~150MB, chỉ tải lần đầu)..."
+    mkdir -p "$vietocr_dir"
+    curl -fL "https://vocr.vn/data/vietocr/vgg_transformer.pth" -o "$vietocr_weights.part"
+    mv "$vietocr_weights.part" "$vietocr_weights"
+fi
 
 echo "Đã cài môi trường ứng dụng."
 echo "Chạy: $project_dir/desktop_app/run.sh"
