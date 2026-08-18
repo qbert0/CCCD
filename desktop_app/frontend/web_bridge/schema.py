@@ -25,9 +25,13 @@ from desktop_app.frontend.documents.base import resolve_document_form_rows
 from desktop_app.frontend.documents.beautiful_number_form import FIELDS as BEAUTIFUL_NUMBER_FIELDS
 from desktop_app.frontend.documents.prepaid_contract_form import FIELDS as PREPAID_CONTRACT_FIELDS
 from desktop_app.frontend.documents.transfer_form import FIELDS as TRANSFER_FIELDS
-from desktop_app.frontend.documents.transfer_form import PAYMENT_METHOD_OPTIONS
+from desktop_app.frontend.documents.transfer_form import (
+    PAYMENT_METHOD_ITEM,
+    PAYMENT_METHOD_OPTIONS,
+    resolve_transfer_form_rows,
+)
 from desktop_app.frontend.field_meta import FieldTier, FieldWidth, document_field_meta, resolve_rows
-from desktop_app.frontend.tabs.document_tab import COMMON_FIELDS, PAYMENT_METHOD_ITEM, resolve_common_rows
+from desktop_app.frontend.tabs.document_tab import COMMON_FIELDS, resolve_common_rows
 
 Row = list[list[tuple[object, int]]]
 
@@ -156,7 +160,10 @@ def resolve_document_form_layout(document_type: DocumentType) -> dict:
     form's OWN fields (not DocumentTab's common fields -- see
     resolve_document_tab_layout below)."""
     field_names = _FORM_FIELD_NAMES_BY_TYPE[document_type]
-    if document_type == DocumentType.AFTERSALE:
+    if document_type == DocumentType.TRANSFER:
+        resolved = resolve_transfer_form_rows()
+        primary_rows, detail_rows, has_detail = resolved["primary_rows"], resolved["detail_rows"], resolved["has_detail"]
+    elif document_type == DocumentType.AFTERSALE:
         # Mirror AftersaleForm.__init__'s explicit repack: backup_phone_1
         # joins the two compound widgets on one primary row; the remaining
         # plain fields (other_attachment, backup_phone_2 -- both DETAIL
@@ -192,7 +199,7 @@ def resolve_document_tab_layout(document_type: DocumentType) -> dict:
     form = resolve_document_form_layout(document_type)
     return {
         "common_rows": _document_rows_to_descriptors(common["rows"]),
-        "notes_field": NOTES_FIELD,
+        "notes_field": None if document_type == DocumentType.TRANSFER else NOTES_FIELD,
         **form,
     }
 

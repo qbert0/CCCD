@@ -113,8 +113,13 @@ class ReportData:
     service_action: str = "Cập nhật thông tin"
     payment_method: str = "Trả trước"
     source_contract_number: str = ""
-    source_contract_date: str = field(default_factory=lambda: date.today().strftime("%d/%m/%Y"))
-    registration_form_date: str = field(default_factory=lambda: date.today().strftime("%d/%m/%Y"))
+    # Dates of pre-existing paperwork the shop must actually look up (the
+    # original service contract / prepaid registration form) -- unlike
+    # transfer_time/transfer_effective_date below (the moment THIS transfer
+    # takes effect, which really is "now"), these should never silently
+    # default to today.
+    source_contract_date: str = ""
+    registration_form_date: str = ""
     transfer_time: str = field(default_factory=lambda: datetime.now().strftime("%H:%M"))
     transfer_effective_date: str = field(default_factory=lambda: date.today().strftime("%d/%m/%Y"))
     has_id_attachment: bool = True

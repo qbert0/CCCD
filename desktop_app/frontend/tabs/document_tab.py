@@ -103,22 +103,19 @@ COMMON_REQUIRED_BY_TYPE = {
     document_type: names - {"shop_phone_2", "shop_phone_3"}
     for document_type, names in COMMON_VISIBLE_BY_TYPE.items()
 }
-# Sentinel item name for Transfer's payment-method selector, packed onto the
-# common row alongside "Ngày lập tài liệu" -- not a COMMON_FIELDS entry, same
-# pattern as person_form.ENTITY_TYPE_ITEM.
-PAYMENT_METHOD_ITEM = "payment_method"
 
 
 def resolve_common_rows(document_type: DocumentType) -> dict:
     """Pure equivalent of DocumentTab.set_document_type()'s common-row
     packing -- single source of truth shared with the web bridge's schema
-    resolver."""
+    resolver. Transfer's payment_method now packs into TransferForm's own
+    row 1 (alongside source_contract_number/source_contract_date) instead
+    of sharing this common row with "Ngày lập tài liệu" -- see
+    documents/transfer_form.py's resolve_transfer_form_rows()."""
     visible = COMMON_VISIBLE_BY_TYPE[document_type]
     items: list[tuple[object, FieldWidth]] = [
         (name, document_field_meta(name).width) for _label, name, _required, _kind in COMMON_FIELDS if name in visible
     ]
-    if document_type == DocumentType.TRANSFER:
-        items.append((PAYMENT_METHOD_ITEM, FieldWidth.SHORT))
     return {"rows": resolve_rows(items)}
 
 
@@ -162,17 +159,16 @@ class DocumentTab(QWidget):
         for name, field in self.common.items():
             field.setVisible(name in visible)
             field.set_required(name in required)
-        # Transfer's "payment method" selector packs onto the same row as
-        # "Ngày lập tài liệu" instead of sitting alone above its own form.
-        payment_group = self.forms[DocumentType.TRANSFER].payment_group
-        is_transfer = document_type == DocumentType.TRANSFER
-        payment_group.setVisible(is_transfer)
+        # Transfer's payment_method now packs into TransferForm's own row 1
+        # instead of sharing this common row with "Ngày lập tài liệu".
+        self.forms[DocumentType.TRANSFER].payment_group.setVisible(document_type == DocumentType.TRANSFER)
 
         def _widgets(rows: list[list[tuple[object, int]]]) -> list[list[tuple[QWidget, int]]]:
-            widget = lambda item: payment_group if item is PAYMENT_METHOD_ITEM else self.common[item]
-            return [[(widget(item), span) for item, span in row] for row in rows]
+            return [[(self.common[item], span) for item, span in row] for row in rows]
 
         place_rows(self.common_grid, _widgets(resolve_common_rows(document_type)["rows"]))
+        # Transfer's form has no free-text notes concept in its own template.
+        self.notes.setVisible(document_type != DocumentType.TRANSFER)
 
     def active_form(self) -> QWidget:
         return self.stack.currentWidget()

@@ -95,6 +95,57 @@ PERSONAL_ONLY_FIELDS = {"full_name"}
 ENTITY_TYPE_ITEM = "entity_type"
 
 
+def _resolve_transfer_person_form(effective_entity_type: str) -> dict:
+    """Transfer's Tổ chức/Thuê bao tabs get a bespoke, always-fully-visible
+    layout -- no "Thông tin chi tiết" disclosure at all, and both tabs use
+    the exact same row structure regardless of which one is which, so a
+    Thuê bao who's also a Tổ chức gets exactly the same fields Tổ chức
+    already shows. Fixed by explicit user request, not derived from the
+    shared PERSON_FIELDS-driven pack order every other document type uses.
+
+    Rows: 1) Loại khách hàng alone; 1.1) Trụ sở chính (org only); 1.2) Số
+    ĐKKD, Người đại diện, Giấy ủy quyền (org only, all optional); 2) Họ và
+    tên/Tên tổ chức, CCCD, Ngày cấp; 3) Nơi cấp, Ngày sinh, Quốc tịch;
+    4) Địa chỉ.
+    """
+    organization = effective_entity_type == "Tổ chức"
+    name_field = "organization_name" if organization else "full_name"
+
+    items: list[tuple[object, FieldWidth]] = [(ENTITY_TYPE_ITEM, FieldWidth.SHORT), (ROW_BREAK, FieldWidth.SHORT)]
+    if organization:
+        items += [
+            ("headquarters_address", FieldWidth.LONG), (ROW_BREAK, FieldWidth.SHORT),
+            ("business_registration_number", FieldWidth.SHORT),
+            ("representative_name", FieldWidth.SHORT),
+            ("authorization_number", FieldWidth.SHORT),
+            (ROW_BREAK, FieldWidth.SHORT),
+        ]
+    items += [
+        (name_field, FieldWidth.SHORT), ("id_number", FieldWidth.SHORT), ("issue_date", FieldWidth.SHORT),
+        (ROW_BREAK, FieldWidth.SHORT),
+        ("issue_place", FieldWidth.SHORT), ("date_of_birth", FieldWidth.SHORT), ("nationality", FieldWidth.SHORT),
+        (ROW_BREAK, FieldWidth.SHORT),
+        ("address", FieldWidth.LONG),
+    ]
+
+    visible_names = {name for name, _width in items if name is not ROW_BREAK and name is not ENTITY_TYPE_ITEM}
+    # Rows 1.1/1.2 (headquarters/business number/representative/authorization)
+    # are optional even for an organization -- only the name field and the
+    # always-shown identity rows (2/3/4) are required, by explicit request.
+    required_names = {name_field, "id_number", "issue_date", "issue_place", "date_of_birth", "address", "nationality"}
+    required_map = {name: name in required_names for name in visible_names}
+
+    return {
+        "allow_entity": True,
+        "effective_entity_type": effective_entity_type,
+        "visible": visible_names,
+        "required": required_map,
+        "primary_rows": resolve_rows(items),
+        "detail_rows": [],
+        "has_detail": False,
+    }
+
+
 def resolve_person_form(document_type: DocumentType, role: str, entity_type: str) -> dict:
     """Pure computation of a PersonForm's visible/required fields and packed
     row layout for (document_type, role, entity_type) -- no live field VALUES
@@ -109,6 +160,9 @@ def resolve_person_form(document_type: DocumentType, role: str, entity_type: str
     """
     allow_entity = document_type in {DocumentType.TRANSFER, DocumentType.PREPAID_CONTRACT}
     effective_entity_type = entity_type if allow_entity else "Cá nhân"
+
+    if document_type == DocumentType.TRANSFER:
+        return _resolve_transfer_person_form(effective_entity_type)
 
     if document_type == DocumentType.BEAUTIFUL_NUMBER:
         base_visible = {"full_name", "id_number"}
