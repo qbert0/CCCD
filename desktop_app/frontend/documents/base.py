@@ -2,7 +2,13 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QGridLayout, QPushButton, QVBoxLayout, QWidget
 
 from desktop_app.frontend.components.field_input import FieldInput
-from desktop_app.frontend.field_meta import GRID_COLUMNS, FieldTier, document_field_meta, pack_fields
+from desktop_app.frontend.field_meta import (
+    GRID_COLUMNS,
+    FieldTier,
+    document_field_meta,
+    pack_fields,
+    resolve_rows,
+)
 
 
 def _grid() -> QGridLayout:
@@ -12,6 +18,22 @@ def _grid() -> QGridLayout:
     for column in range(GRID_COLUMNS):
         grid.setColumnStretch(column, 1)
     return grid
+
+
+def resolve_document_form_rows(field_names: list[str]) -> dict:
+    """Pure split of `field_names` (in insertion order, as `add_field()` was/
+    would be called) into primary/detail row layouts, purely from each
+    name's `document_field_meta().tier`/`.width` -- no QWidget involved.
+    Single source of truth for how a document form's fields pack, shared by
+    `BaseDocumentForm.add_field()` below and the web bridge's schema
+    resolver."""
+    primary_names = [n for n in field_names if document_field_meta(n).tier != FieldTier.DETAIL]
+    detail_names = [n for n in field_names if document_field_meta(n).tier == FieldTier.DETAIL]
+    return {
+        "primary_rows": resolve_rows([(n, document_field_meta(n).width) for n in primary_names]),
+        "detail_rows": resolve_rows([(n, document_field_meta(n).width) for n in detail_names]),
+        "has_detail": bool(detail_names),
+    }
 
 
 class BaseDocumentForm(QWidget):

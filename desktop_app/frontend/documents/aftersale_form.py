@@ -5,6 +5,20 @@ from desktop_app.frontend.field_meta import FieldWidth, pack_fields
 
 from .base import BaseDocumentForm
 
+ACTION_OPTIONS = ["Cập nhật thông tin", "Thay SIM", "Chuyển chủ quyền"]
+ATTACHMENT_ITEMS = [("has_id_attachment", "CCCD/CMND"), ("has_original_sim", "SIM gốc")]
+
+# (label, name, required, input_kind) for the plain fields -- shared with the
+# web bridge's schema resolver, same pattern as PERSON_FIELDS. "action" and
+# "attachments" (has_id_attachment/has_original_sim) are compound widgets,
+# not plain FieldInputs, so they aren't in this list -- see ACTION_OPTIONS/
+# ATTACHMENT_ITEMS above and the manual repack below, same as before.
+FIELDS = [
+    ("Số điện thoại phối hợp 1", "backup_phone_1", True, "number"),
+    ("Giấy tờ khác (nêu rõ)", "other_attachment", False, "text"),
+    ("Số điện thoại phối hợp 2", "backup_phone_2", False, "number"),
+]
+
 
 class AftersaleForm(BaseDocumentForm):
     def __init__(self, parent=None):
@@ -18,7 +32,7 @@ class AftersaleForm(BaseDocumentForm):
         label = QLabel("Dịch vụ yêu cầu")
         label.setObjectName("fieldLabel")
         self.action = QComboBox()
-        self.action.addItems(["Cập nhật thông tin", "Thay SIM", "Chuyển chủ quyền"])
+        self.action.addItems(ACTION_OPTIONS)
         self.action.setCursor(Qt.PointingHandCursor)
         action_layout.addWidget(label)
         action_layout.addWidget(self.action)
@@ -41,9 +55,8 @@ class AftersaleForm(BaseDocumentForm):
         checks.addWidget(self.has_sim)
         attachments_layout.addLayout(checks)
 
-        self.add_field("Số điện thoại phối hợp 1", "backup_phone_1", required=True, input_kind="number")
-        self.add_field("Giấy tờ khác (nêu rõ)", "other_attachment")
-        self.add_field("Số điện thoại phối hợp 2", "backup_phone_2", input_kind="number")
+        for label_text, name, required, input_kind in FIELDS:
+            self.add_field(label_text, name, required=required, input_kind=input_kind)
 
         # Re-pack the primary row: action + attachments + phone together
         # (3 SHORT slots, exact fit) instead of 3 separate almost-empty rows.

@@ -4,6 +4,21 @@ from PyQt5.QtWidgets import QComboBox, QLabel, QVBoxLayout, QWidget
 from .base import BaseDocumentForm
 
 
+PAYMENT_METHOD_OPTIONS = ["Trả trước", "Trả sau"]
+
+# (label, name, required, input_kind) -- shared with the web bridge's schema
+# resolver, same pattern as PERSON_FIELDS in person_form.py. Order is the
+# packing order (see BaseDocumentForm.add_field()/resolve_document_form_rows()).
+FIELDS = [
+    ("Số hợp đồng", "source_contract_number", False, "number"),
+    ("Ngày chuyển quyền có hiệu lực", "transfer_effective_date", True, "date"),
+    ("Người đại diện Bên B ký", "provider_representative", False, "text"),
+    ("Ngày hợp đồng", "source_contract_date", False, "date"),
+    ("Ngày Phiếu đăng ký dịch vụ", "registration_form_date", False, "date"),
+    ("Giờ chuyển quyền", "transfer_time", False, "text"),
+]
+
+
 class TransferForm(BaseDocumentForm):
     """Fields printed in the ownership transfer and liquidation record."""
 
@@ -19,19 +34,13 @@ class TransferForm(BaseDocumentForm):
         label = QLabel('Hình thức thanh toán <span style="color:#cf2d56">*</span>')
         label.setObjectName("fieldLabel")
         self.payment_method = QComboBox()
-        self.payment_method.addItems(["Trả trước", "Trả sau"])
+        self.payment_method.addItems(PAYMENT_METHOD_OPTIONS)
         self.payment_method.setCursor(Qt.PointingHandCursor)
         payment_layout.addWidget(label)
         payment_layout.addWidget(self.payment_method)
 
-        self.add_field("Số hợp đồng", "source_contract_number", input_kind="number")
-        self.add_field(
-            "Ngày chuyển quyền có hiệu lực", "transfer_effective_date", required=True, input_kind="date"
-        )
-        self.add_field("Người đại diện Bên B ký", "provider_representative")
-        self.add_field("Ngày hợp đồng", "source_contract_date", input_kind="date")
-        self.add_field("Ngày Phiếu đăng ký dịch vụ", "registration_form_date", input_kind="date")
-        self.add_field("Giờ chuyển quyền", "transfer_time")
+        for label_text, name, required, input_kind in FIELDS:
+            self.add_field(label_text, name, required=required, input_kind=input_kind)
 
         self.fields["source_contract_number"].changed.connect(self._refresh_contract_requirement)
 
