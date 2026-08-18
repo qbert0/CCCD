@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 from pathlib import Path
+
+# Must run before QtWebEngineWidgets is imported anywhere (Chromium reads it
+# at sandbox-init time): a known PyInstaller+QtWebEngine gotcha on restricted/
+# non-root machines where the frozen build would otherwise show a blank
+# window. Only for the frozen case -- running from source under a normal
+# user session doesn't need it.
+if getattr(sys, "frozen", False):
+    os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication
@@ -12,7 +21,7 @@ from desktop_app.backend.domain.models import DocumentType, PersonData, ReportDa
 from desktop_app.backend.ocr import OCRService
 from desktop_app.backend.ocr.service import _log_error
 from desktop_app.backend.paths import source_data_dir
-from desktop_app.frontend.pages import HomePage
+from desktop_app.frontend.pages.web_home_page import WebHomePage
 from desktop_app.frontend.styles import APP_STYLE
 
 
@@ -62,8 +71,8 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("CCCD Report")
     app.setOrganizationName("CCCDReport")
-    app.setStyleSheet(APP_STYLE)
-    window = HomePage()
+    app.setStyleSheet(APP_STYLE)  # still styles the native QFileDialog/QMessageBox the web bridge opens
+    window = WebHomePage()
     window.show()
     return app.exec_()
 
