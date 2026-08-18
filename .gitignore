@@ -1,0 +1,25 @@
+.venv-ocr/
+.venv-desktop/
+.uv-cache/
+.pyinstaller/
+build/
+product/
+dist_installers/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+local.env
+paddle_models/
+UI-element/
+
+# VietOCR's pretrained weights (~150MB) exceed GitHub's 100MB blob limit,
+# unlike the small bundled PaddleOCR det/rec/cls models — fetched once by
+# desktop_app/install.sh into this same path instead of being committed.
+runtime_models/vietocr/vgg_transformer.pth
+desktop_app/data/output/*
+!desktop_app/data/output/.gitkeep
+
+# Real customer scans/filled contracts kept as local dev reference only —
+# never push real people's ID photos or personal data to this public repo.
+desktop_app/data/source/original_documents/
