@@ -238,16 +238,16 @@
             <tabs :tabs="tabsList" v-model="state.ui.activeTab" />
 
             <div class="tabpanel" v-show="state.ui.activeTab === 'customer'" style="overflow-y:auto; flex:1;">
-              <form-grid :rows="customerTabRows.primary_rows" :root="state" @open-calendar="openCalendar" />
+              <form-grid :rows="customerTabRows.primary_rows" :root="state" @open-calendar="openCalendar" @entity-type-changed="onEntityTypeChange('customer')" />
               <disclosure v-if="customerTabRows.has_detail" v-model="state.ui.detailOpen.customer" label="Thông tin chi tiết" style="margin-top: var(--space-sm);">
-                <form-grid :rows="customerTabRows.detail_rows" :root="state" @open-calendar="openCalendar" />
+                <form-grid :rows="customerTabRows.detail_rows" :root="state" @open-calendar="openCalendar" @entity-type-changed="onEntityTypeChange('customer')" />
               </disclosure>
             </div>
 
             <div class="tabpanel" v-show="state.ui.activeTab === 'new_owner'" style="overflow-y:auto; flex:1;">
-              <form-grid :rows="newOwnerTabRows.primary_rows" :root="state" @open-calendar="openCalendar" />
+              <form-grid :rows="newOwnerTabRows.primary_rows" :root="state" @open-calendar="openCalendar" @entity-type-changed="onEntityTypeChange('new_owner')" />
               <disclosure v-if="newOwnerTabRows.has_detail" v-model="state.ui.detailOpen.new_owner" label="Thông tin chi tiết" style="margin-top: var(--space-sm);">
-                <form-grid :rows="newOwnerTabRows.detail_rows" :root="state" @open-calendar="openCalendar" />
+                <form-grid :rows="newOwnerTabRows.detail_rows" :root="state" @open-calendar="openCalendar" @entity-type-changed="onEntityTypeChange('new_owner')" />
               </disclosure>
             </div>
 

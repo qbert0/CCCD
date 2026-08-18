@@ -8,7 +8,7 @@ CCCD.components = {};
 // ---------------------------------------------------------------------------
 CCCD.components.FieldInput = {
   props: { field: Object, root: Object },
-  emits: ["open-calendar"],
+  emits: ["open-calendar", "entity-type-changed"],
   computed: {
     value() {
       return CCCD.getByPath(this.root, this.field.path) ?? "";
@@ -26,6 +26,13 @@ CCCD.components.FieldInput = {
     setValue(v) {
       CCCD.setByPath(this.root, this.field.path, v);
       if (v && this.error) delete CCCD.state.ui.errors[this.field.path];
+      // The entity_type select (Cá nhân/Tổ chức) doesn't just change a
+      // value -- it changes which OTHER fields are even visible/required,
+      // which only Python (resolve_person_form) knows how to recompute. A
+      // plain value write here would leave the old field layout stale.
+      if (this.field.name === "entity_type") {
+        this.$emit("entity-type-changed", { path: this.field.path, value: v });
+      }
     },
     onNumberInput(e) {
       const cleaned = e.target.value.replace(/[^0-9 ]/g, "");
@@ -86,13 +93,14 @@ CCCD.components.CheckboxGroup = {
 // ---------------------------------------------------------------------------
 CCCD.components.FormGrid = {
   props: { rows: Array, root: Object },
-  emits: ["open-calendar"],
+  emits: ["open-calendar", "entity-type-changed"],
   template: `
     <div class="form-grid">
       <template v-for="(row, ri) in rows" :key="ri">
         <div v-for="cell in row" :key="cell.field.path" :class="'form-grid__cell--span-' + cell.span">
           <checkbox-group v-if="cell.field.kind === 'checkbox_group'" :field="cell.field" :root="root" />
-          <field-input v-else :field="cell.field" :root="root" @open-calendar="$emit('open-calendar', $event)" />
+          <field-input v-else :field="cell.field" :root="root" @open-calendar="$emit('open-calendar', $event)"
+            @entity-type-changed="$emit('entity-type-changed', $event)" />
         </div>
       </template>
     </div>
