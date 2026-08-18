@@ -41,7 +41,7 @@ CCCD.state = Vue.reactive({
       newOwnerUploadVisible: false,
     },
     activeTab: "customer",
-    detailOpen: { customer: false, new_owner: false, document: false },
+    detailOpen: { customer: false, new_owner: false, document: false, profile: false },
     ocrPanelOpen: false,
     ocrRawText: { customer: "", new_owner: "" },
     errors: {}, // dotted ReportData path -> message

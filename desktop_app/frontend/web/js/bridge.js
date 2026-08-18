@@ -27,8 +27,9 @@ CCCD.bridgeReady = new Promise((resolve) => {
       exportDocument: (stateObj) => call("export_document", JSON.stringify(stateObj)),
       getReviewSummary: (stateObj) => call("get_review_summary", JSON.stringify(stateObj)),
       getCompanyProfile: () => call("get_company_profile"),
+      getCompanyProfileLayout: () => call("get_company_profile_layout"),
       saveCompanyProfile: (personObj) => call("save_company_profile", JSON.stringify(personObj)),
-      newCase: () => call("new_case"),
+      newCase: (stateObj) => call("new_case", JSON.stringify(stateObj)),
 
       onOcrProgress: (fn) => raw.ocrProgress.connect(fn),
       onOcrFileResult: (fn) => raw.ocrFileResult.connect((target, json) => fn(target, JSON.parse(json))),

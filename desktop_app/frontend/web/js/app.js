@@ -8,6 +8,8 @@
         calendar: null, // { field, anchorRect } | null
         reviewOpen: false,
         reviewSummary: "",
+        profile: null, // PersonData dict while the company-profile dialog is open
+        profileLayout: null,
       };
     },
     computed: {
@@ -30,6 +32,13 @@
       // not.
       primaryUploadTarget() {
         return state.document_type === "transfer" ? "new_owner" : "customer";
+      },
+      // Wraps the open profile dialog's PersonData so field paths resolved
+      // as "profile.full_name" (see get_company_profile_layout()) land on
+      // this.profile.full_name -- same getByPath/setByPath FieldInput uses
+      // everywhere else, just a differently-rooted object than CCCD.state.
+      profileRoot() {
+        return { profile: this.profile || {} };
       },
       tabsList() {
         const t = state.ui.tabs;
@@ -152,6 +161,38 @@
         const result = await CCCD.bridge.previewDocument(CCCD.reportDataSnapshot());
         if (!result.ok) CCCD.pushToast(result.message, "error");
       },
+      async newCase() {
+        const fresh = await CCCD.bridge.newCase(CCCD.reportDataSnapshot());
+        Object.assign(state, fresh);
+        state.ui.upload.customer = { front: null, back: null, status: "Chưa có ảnh", invalid: false, note: "", busy: false, progress: null };
+        state.ui.upload.new_owner = { front: null, back: null, status: "Chưa có ảnh", invalid: false, note: "", busy: false, progress: null };
+        state.ui.ocrRawText = { customer: "", new_owner: "" };
+        state.ui.ocrPanelOpen = false;
+        state.ui.errors = {};
+        state.ui.activeTab = "customer";
+        if (state.document_type) await this.onDocumentTypeChange(state.document_type);
+        state.ui.statusMessage = "Đã mở hồ sơ mới · biểu mẫu và thông tin cửa hàng được giữ lại";
+      },
+      async openCompanyProfile() {
+        const [person, layout] = await Promise.all([CCCD.bridge.getCompanyProfile(), CCCD.bridge.getCompanyProfileLayout()]);
+        this.profile = person;
+        this.profileLayout = layout;
+        for (const key of Object.keys(state.ui.errors)) {
+          if (key.startsWith("profile.")) delete state.ui.errors[key];
+        }
+        this.$nextTick(() => this.$refs.profileDialog.showModal());
+      },
+      async saveProfile() {
+        const result = await CCCD.bridge.saveCompanyProfile(this.profile);
+        if (!result.ok) {
+          for (const e of result.errors) state.ui.errors[e.path] = e.message;
+          return;
+        }
+        this.$refs.profileDialog.close();
+        this.profile = null;
+        if (state.document_type) await this.onDocumentTypeChange(state.document_type);
+        CCCD.pushToast("Đã lưu thông tin công ty", "success");
+      },
     },
     template: `
       <div class="header">
@@ -160,7 +201,7 @@
           <span class="header__subtitle">Nhận dạng căn cước và tạo tài liệu</span>
         </div>
         <div class="header__spacer"></div>
-        <button class="btn" type="button">Thông tin công ty</button>
+        <button class="btn" type="button" @click="openCompanyProfile">Thông tin công ty</button>
       </div>
 
       <div class="workspace" v-if="state.booted">
@@ -170,7 +211,7 @@
               <input class="field__control" type="text" placeholder="Nhập số thuê bao"
                 v-model="state.subscriber_number">
             </div>
-            <button class="btn btn--ghost" type="button">↻ Hồ sơ mới</button>
+            <button class="btn btn--ghost" type="button" @click="newCase">↻ Hồ sơ mới</button>
           </div>
 
           <upload-card :target="primaryUploadTarget" />
@@ -249,6 +290,21 @@
         <div class="modal__actions">
           <button class="btn" type="button" @click="$refs.reviewDialog.close()">Quay lại chỉnh sửa</button>
           <button class="btn btn--primary" type="button" @click="confirmExport">Thông tin chính xác</button>
+        </div>
+      </dialog>
+
+      <dialog class="modal" ref="profileDialog" @close="profile = null" style="width:min(900px,92vw);">
+        <div class="modal__body" v-if="profile && profileLayout">
+          <h2 class="modal__title">Thông tin công ty</h2>
+          <p class="muted-text">Thông tin cố định của công ty, ít thay đổi — tự áp dụng làm mặc định cho mọi tài liệu (Bên A, người đại diện ký...). Sửa riêng cho một tài liệu cụ thể ở màn hình kiểm tra thông tin sẽ không ghi đè lên hồ sơ mặc định này.</p>
+          <form-grid :rows="profileLayout.primary_rows" :root="profileRoot" @open-calendar="openCalendar" />
+          <disclosure v-if="profileLayout.has_detail" v-model="state.ui.detailOpen.profile" label="Thông tin chi tiết">
+            <form-grid :rows="profileLayout.detail_rows" :root="profileRoot" @open-calendar="openCalendar" />
+          </disclosure>
+        </div>
+        <div class="modal__actions">
+          <button class="btn" type="button" @click="$refs.profileDialog.close()">Hủy</button>
+          <button class="btn btn--primary" type="button" @click="saveProfile">Lưu thông tin công ty</button>
         </div>
       </dialog>
 

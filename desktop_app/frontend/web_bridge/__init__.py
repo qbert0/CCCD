@@ -351,6 +351,20 @@ class WebBridge(QObject):
         except Exception as exc:  # noqa: BLE001
             return json.dumps({"ok": False, "message": str(exc)})
 
+    @pyqtSlot(str, result=str)
+    def new_case(self, state_json: str) -> str:
+        """Equivalent of HomePage._new_case(): fresh customer/new_owner/
+        document defaults, but persistent OPERATOR-tier fields (staff_name,
+        shop_phone) and the document type itself survive, exactly like the
+        old "Hồ sơ mới" button. The caller (JS) still needs to re-run
+        on_document_type_changed itself afterwards to refresh layouts/tabs/
+        company-profile application -- this slot only resets the data."""
+        state = json.loads(state_json)
+        fresh = self._default_report_dict()
+        fresh["document_type"] = state.get("document_type", "")
+        self._accepted_files = {"customer": {}, "new_owner": {}}
+        return json.dumps(fresh)
+
     @pyqtSlot(str)
     def persist_operator_fields(self, state_json: str) -> None:
         state = json.loads(state_json)
@@ -363,6 +377,16 @@ class WebBridge(QObject):
     # ------------------------------------------------------------------
 
     @pyqtSlot(result=str)
+    def get_company_profile_layout(self) -> str:
+        """Same layout as Transfer's customer form in "Tổ chức" mode --
+        CompanyProfilePage.__init__ configures its PersonForm identically
+        (DocumentType.TRANSFER, role "customer", entity_type forced to "Tổ
+        chức" and disabled). Independent of any active document type on the
+        main page, so it works no matter what's currently open."""
+        layout = resolve_person_layout("profile", DocumentType.TRANSFER, "customer", "Tổ chức")
+        return json.dumps(layout)
+
+    @pyqtSlot(result=str)
     def get_company_profile(self) -> str:
         return json.dumps(asdict(self.company_profile))
 
@@ -370,12 +394,25 @@ class WebBridge(QObject):
     def save_company_profile(self, person_json: str) -> str:
         person = person_from_dict(json.loads(person_json))
         person.entity_type = "Tổ chức"
+        # value_at() (rules.py) walks the path as real attribute names on
+        # `report`, so this must stay prefixed "customer" (a real ReportData
+        # field) for required_errors() to actually see the person's values --
+        # only translated to "profile.*" afterwards, to match the JS-side
+        # dialog's field paths (get_company_profile_layout()), which are
+        # deliberately NOT "customer.*" so they can never collide with the
+        # main page's own customer-tab errors if both happened to be
+        # populated at once.
         report = ReportData(document_type=DocumentType.TRANSFER, customer=person)
         required = party_required("customer", person) + ["customer.date_of_birth", "customer.address", "customer.nationality"]
         errors = required_errors(report, required)
         errors += person_errors("customer", person, {"id_number", "date_of_birth", "issue_date", "authorization_date"})
         if errors:
-            return json.dumps({"ok": False, "errors": [{"path": e.path, "message": e.message} for e in errors]})
+            return json.dumps(
+                {
+                    "ok": False,
+                    "errors": [{"path": e.path.replace("customer.", "profile.", 1), "message": e.message} for e in errors],
+                }
+            )
         save_company_profile(self.settings, person)
         self.company_profile = person
         return json.dumps({"ok": True, "errors": []})
