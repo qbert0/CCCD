@@ -26,8 +26,17 @@ if [[ ! -x "$(venv_python)" ]]; then
     UV_CACHE_DIR="$cache_dir" uv venv --python 3.11 "$venv_dir"
 fi
 
+# requirements.txt lists torch/torchvision twice, gated by a sys_platform
+# marker (PyTorch's "+cpu" build only exists for Linux/Windows) -- both
+# lines resolve against the same package name "torch", and uv's default
+# dependency-confusion guard stops at the first index that knows that name
+# (the pytorch.org CPU index) even for the darwin-only line, which has no
+# wheel there. unsafe-best-match lets it fall through to PyPI for that line
+# instead; every other package here only ever has one candidate anyway, so
+# this doesn't loosen anything for them.
 UV_CACHE_DIR="$cache_dir" uv pip install \
     --python "$(venv_python)" \
+    --index-strategy unsafe-best-match \
     -r "$app_dir/requirements.txt" \
     --overrides "$app_dir/overrides.txt"
 
