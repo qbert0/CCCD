@@ -17,6 +17,10 @@ class BaseDocumentModule(ABC):
     suffix: str
     schema = None
     placeholders: frozenset[str] = frozenset()
+    # Most templates use an exact placeholder contract so an accidental
+    # deletion is caught early. A module may opt into treating its DOCX as
+    # the source of truth, in which case any supported subset is valid.
+    allow_missing_placeholders = False
 
     def __init__(self) -> None:
         if not self.template.exists():
@@ -46,7 +50,13 @@ class BaseDocumentModule(ABC):
         output_dir.mkdir(parents=True, exist_ok=True)
         stem = data.safe_stem() + ("_Xem_truoc" if preview else "")
         output = self._unique_output(output_dir, stem, self.suffix)
-        render_document(data, self.template, output, self.placeholders)
+        render_document(
+            data,
+            self.template,
+            output,
+            self.placeholders,
+            allow_missing_placeholders=self.allow_missing_placeholders,
+        )
         if preview:
             # A preview is only meant to be looked at — make it read-only so
             # opening it in Word/LibreOffice can't silently overwrite it as

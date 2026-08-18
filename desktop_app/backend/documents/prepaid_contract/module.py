@@ -9,6 +9,10 @@ class PrepaidContractDocumentModule(BaseDocumentModule):
     document_type = DocumentType.PREPAID_CONTRACT
     suffix = ".docx"
     schema = PrepaidContractSchema
+    # This template is intentionally edited by the user and may omit fields.
+    # Fill exactly the supported placeholders that remain in the DOCX instead
+    # of requiring every field in the context to be present in the template.
+    allow_missing_placeholders = True
     placeholders = frozenset({
         "contract_number", "subscriber_code", "document_date_line", "prepaid_organization_name",
         "prepaid_headquarters_address", "prepaid_business_number", "prepaid_business_issue_place",

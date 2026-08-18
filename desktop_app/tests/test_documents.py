@@ -8,7 +8,7 @@ from docx.text.paragraph import Paragraph
 from pypdf import PdfReader
 
 from desktop_app.backend.documents import DocumentRegistry
-from desktop_app.backend.documents.renderer import CHECKED_BOX, EMPTY_BOX
+from desktop_app.backend.documents.renderer import CHECKED_BOX, EMPTY_BOX, _PLACEHOLDER, _iter_paragraphs
 from desktop_app.backend.domain.models import DocumentType, PersonData, ReportData
 
 
@@ -176,6 +176,58 @@ class DocumentTest(unittest.TestCase):
             self.assertIn("Điểm giao dịch Xã Đàn", text)
             self.assertNotIn("{{", text)
 
+    def test_prepaid_template_accepts_an_intentionally_removed_placeholder(self):
+        with tempfile.TemporaryDirectory() as folder:
+            data = self.report(DocumentType.PREPAID_CONTRACT)
+            module = self.registry.for_data(data)
+            document = Document(str(module.template))
+            removed = False
+            for paragraph in _iter_paragraphs(document):
+                updated = _PLACEHOLDER.sub(
+                    lambda match: "" if match.group(1) == "prepaid_individual_email" else match.group(0),
+                    paragraph.text,
+                )
+                if updated != paragraph.text:
+                    paragraph.text = updated
+                    removed = True
+            self.assertTrue(removed)
+
+            template = Path(folder) / "prepaid_without_email_placeholder.docx"
+            document.save(str(template))
+            module.template = template
+            output = module.generate(data, Path(folder) / "output")
+            self.assertNotIn("{{", docx_text(output))
+
+    def test_empty_fields_use_dots_outside_tables_and_stay_blank_inside(self):
+        with tempfile.TemporaryDirectory() as folder:
+            transfer = self.report(DocumentType.TRANSFER)
+            transfer.customer.authorization_number = ""
+            transfer.customer.authorization_date = ""
+            output = self.registry.for_data(transfer).generate(transfer, Path(folder))
+            table = Document(str(output)).tables[0]
+            self.assertEqual(table.rows[5].cells[1].text, "")
+            self.assertEqual(table.rows[5].cells[2].text, "")
+
+        with tempfile.TemporaryDirectory() as folder:
+            aftersale = self.report(DocumentType.AFTERSALE)
+            aftersale.other_attachment = ""
+            output = self.registry.for_data(aftersale).generate(aftersale, Path(folder))
+            self.assertIn("." * 48, docx_text(output))
+
+        with tempfile.TemporaryDirectory() as folder:
+            beautiful = self.report(DocumentType.BEAUTIFUL_NUMBER)
+            beautiful.commitment_note = ""
+            output = self.registry.for_data(beautiful).generate(beautiful, Path(folder))
+            self.assertEqual(Document(str(output)).tables[0].rows[1].cells[4].text, "")
+
+        with tempfile.TemporaryDirectory() as folder:
+            prepaid = self.report(DocumentType.PREPAID_CONTRACT)
+            prepaid.customer.email = ""
+            output = self.registry.for_data(prepaid).generate(prepaid, Path(folder))
+            self.assertIn("Email: " + "." * 24, docx_text(output))
+            subscriber_table = Document(str(output)).tables[0]
+            self.assertTrue(all(cell.text == "" for cell in subscriber_table.rows[2].cells))
+
     def test_generates_transfer_docx_with_customer(self):
         with tempfile.TemporaryDirectory() as folder:
             data = self.report(DocumentType.TRANSFER)
@@ -256,11 +308,26 @@ class DocumentTest(unittest.TestCase):
         errors = self.registry.for_data(data).check(data)
         self.assertTrue(any(error.path == "new_owner.id_number" for error in errors))
 
-    def test_transfer_contract_number_requires_its_date(self):
+    def test_transfer_contract_and_registration_form_fields_are_optional(self):
         data = self.report(DocumentType.TRANSFER)
+        data.source_contract_number = ""
         data.source_contract_date = ""
+        data.registration_form_date = ""
         errors = self.registry.for_data(data).check(data)
-        self.assertTrue(any(error.path == "source_contract_date" for error in errors))
+        optional_paths = {
+            "source_contract_number", "source_contract_date", "registration_form_date",
+        }
+        self.assertFalse(any(error.path in optional_paths for error in errors))
+
+    def test_prepaid_contact_service_point_and_registration_time_are_optional(self):
+        data = self.report(DocumentType.PREPAID_CONTRACT)
+        data.prepaid_structured_parties = True
+        optional_paths = {
+            "representative.phone", "new_owner.phone",
+            "service_point_name", "registration_time",
+        }
+        required = set(self.registry.for_data(data).required_paths(data))
+        self.assertTrue(optional_paths.isdisjoint(required))
 
     def test_transfer_rejects_minutes_or_an_hour_outside_the_day(self):
         data = self.report(DocumentType.TRANSFER)

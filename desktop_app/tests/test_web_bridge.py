@@ -126,6 +126,8 @@ class WebBridgeTest(unittest.TestCase):
         ]
         position = next(field for field in representative_fields if field["name"] == "representative_position")
         self.assertEqual(position["options"], ["Giám đốc", "Nhân viên"])
+        representative_phone = next(field for field in representative_fields if field["name"] == "phone")
+        self.assertFalse(representative_phone["required"])
         self.assertTrue({"phone", "email", "other_contact"}.issubset(
             {field["name"] for field in representative_fields}
         ))
@@ -134,7 +136,24 @@ class WebBridgeTest(unittest.TestCase):
             for row in response["layouts"]["new_owner"]["primary_rows"] for cell in row
         }
         self.assertTrue({"phone", "email", "other_contact"}.issubset(customer_names))
+        customer_fields = [
+            cell["field"]
+            for row in response["layouts"]["new_owner"]["primary_rows"]
+            for cell in row
+        ]
+        customer_phone = next(field for field in customer_fields if field["name"] == "phone")
+        self.assertFalse(customer_phone["required"])
         self.assertEqual(len(response["layouts"]["document"]["sections"]), 2)
+        provider_fields = [
+            cell["field"]
+            for section in response["layouts"]["document"]["sections"]
+            for row in section["rows"]
+            for cell in row
+        ]
+        service_point = next(field for field in provider_fields if field["name"] == "service_point_name")
+        registration_time = next(field for field in provider_fields if field["name"] == "registration_time")
+        self.assertFalse(service_point["required"])
+        self.assertFalse(registration_time["required"])
         self.assertEqual(response["layouts"]["sims"]["max_rows"], 5)
 
     def test_company_profile_layout_keeps_only_company_information(self):

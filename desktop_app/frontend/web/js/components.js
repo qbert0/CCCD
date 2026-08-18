@@ -2,6 +2,75 @@ window.CCCD = window.CCCD || {};
 CCCD.components = {};
 
 // ---------------------------------------------------------------------------
+// CompositionSafeControl -- keep the browser's live editing buffer outside
+// Vue's controlled `value` patching. QtWebEngine/Fcitx does not consistently
+// expose isComposing/compositionstart for every Vietnamese IME sequence; a
+// reactive :value binding can therefore put an older value back into the DOM
+// between Telex/VNI keystrokes. This component writes external values only
+// while the control is not being edited, but still publishes every real DOM
+// input immediately to ReportData.
+// ---------------------------------------------------------------------------
+CCCD.components.CompositionSafeControl = {
+  inheritAttrs: false,
+  props: {
+    modelValue: { type: [String, Number], default: "" },
+    multiline: Boolean,
+    numeric: Boolean,
+    maxLength: { type: [String, Number], default: 0 },
+  },
+  emits: ["update:modelValue"],
+  data() {
+    return { editing: false, composing: false };
+  },
+  watch: {
+    modelValue(value) {
+      this.syncExternalValue(value);
+    },
+  },
+  mounted() {
+    this.syncExternalValue(this.modelValue, true);
+  },
+  methods: {
+    normalized(value) {
+      let text = String(value ?? "");
+      if (this.numeric) text = text.replace(/\D/g, "");
+      const limit = Number(this.maxLength || 0);
+      return limit ? text.slice(0, limit) : text;
+    },
+    syncExternalValue(value, force = false) {
+      const control = this.$refs.control;
+      if (!control || (!force && (this.editing || this.composing))) return;
+      const text = this.normalized(value);
+      if (control.value !== text) control.value = text;
+    },
+    publish(event) {
+      const value = this.normalized(event.target.value);
+      if (event.target.value !== value) event.target.value = value;
+      this.$emit("update:modelValue", value);
+    },
+    onCompositionEnd(event) {
+      this.composing = false;
+      this.publish(event);
+    },
+    onBlur(event) {
+      this.composing = false;
+      this.editing = false;
+      this.publish(event);
+    },
+  },
+  template: `
+    <textarea v-if="multiline" ref="control" v-bind="$attrs"
+      @focus="editing = true" @blur="onBlur" @input="publish"
+      @compositionstart="composing = true" @compositionend="onCompositionEnd"></textarea>
+    <input v-else ref="control" v-bind="$attrs" type="text"
+      :inputmode="numeric ? 'numeric' : ($attrs.inputmode || 'text')"
+      :maxlength="maxLength || null"
+      @focus="editing = true" @blur="onBlur" @input="publish"
+      @compositionstart="composing = true" @compositionend="onCompositionEnd">
+  `,
+};
+
+// ---------------------------------------------------------------------------
 // FieldInput -- UI-element/FormField.md anatomy: label, required asterisk,
 // placeholder (a format hint only), helper text, error message (replaces
 // helper, never stacks under it -- same rule as the old FieldInput.set_error()).
@@ -9,9 +78,6 @@ CCCD.components = {};
 CCCD.components.FieldInput = {
   props: { field: Object, root: Object },
   emits: ["open-calendar", "entity-type-changed"],
-  data() {
-    return { composing: false };
-  },
   computed: {
     value() {
       return CCCD.getByPath(this.root, this.field.path) ?? "";
@@ -37,26 +103,6 @@ CCCD.components.FieldInput = {
         this.$emit("entity-type-changed", { path: this.field.path, value: v });
       }
     },
-    onNumberInput(e) {
-      const maxLength = Number(this.field.max_length || 0);
-      const digits = e.target.value.replace(/\D/g, "");
-      const cleaned = maxLength ? digits.slice(0, maxLength) : digits;
-      e.target.value = cleaned;
-      this.setValue(cleaned);
-    },
-    onTextInput(e) {
-      if (!this.composing && !e.isComposing) this.setValue(e.target.value);
-    },
-    onCompositionStart() {
-      // Vietnamese IMEs emit several provisional input events while a word
-      // is being composed. Writing those fragments back through Vue's
-      // controlled :value would replace the browser's composition buffer.
-      this.composing = true;
-    },
-    onCompositionEnd(e) {
-      this.composing = false;
-      this.setValue(e.target.value);
-    },
   },
   template: `
     <div class="field">
@@ -67,19 +113,18 @@ CCCD.components.FieldInput = {
         :value="value" @change="setValue($event.target.value)">
         <option v-for="opt in field.options" :key="opt" :value="opt">{{ opt }}</option>
       </select>
-      <textarea v-else-if="field.kind === 'textarea'" class="field__control" :id="field.path"
-        :placeholder="placeholder" :value="value" @input="onTextInput"
-        @compositionstart="onCompositionStart" @compositionend="onCompositionEnd"></textarea>
-      <input v-else-if="field.kind === 'number'" class="field__control" type="text" inputmode="numeric"
-        :id="field.path" :placeholder="placeholder" :value="value" :data-invalid="!!error"
-        :maxlength="field.max_length || null"
-        @input="onNumberInput">
+      <composition-safe-control v-else-if="field.kind === 'textarea'" multiline
+        class="field__control" :id="field.path" :placeholder="placeholder"
+        :model-value="value" @update:model-value="setValue" />
+      <composition-safe-control v-else-if="field.kind === 'number'" numeric
+        class="field__control" :id="field.path" :placeholder="placeholder" :data-invalid="!!error"
+        :max-length="field.max_length || 0" :model-value="value" @update:model-value="setValue" />
       <input v-else-if="field.kind === 'date'" class="field__control" type="text" :id="field.path"
         :placeholder="placeholder" :value="value" :data-invalid="!!error" readonly
         @click="$emit('open-calendar', { field, root, $event })">
-      <input v-else class="field__control" type="text" :id="field.path"
-        :placeholder="placeholder" :value="value" :data-invalid="!!error"
-        @input="onTextInput" @compositionstart="onCompositionStart" @compositionend="onCompositionEnd">
+      <composition-safe-control v-else class="field__control" :id="field.path"
+        :placeholder="placeholder" :data-invalid="!!error"
+        :model-value="value" @update:model-value="setValue" />
       <div v-if="field.helper && !error" class="field__helper">{{ field.helper }}</div>
       <div v-if="error" class="field__error">{{ error }}</div>
     </div>
@@ -113,9 +158,6 @@ CCCD.components.CheckboxGroup = {
 // ---------------------------------------------------------------------------
 CCCD.components.SubscriberTable = {
   props: { field: Object, root: Object },
-  data() {
-    return { composingPath: "" };
-  },
   computed: {
     rows() {
       return this.root[this.field.list_path] || [];
@@ -145,27 +187,6 @@ CCCD.components.SubscriberTable = {
     setValue(column, index, value) {
       this.rows[index][column.name] = value;
       delete CCCD.state.ui.errors[this.path(column, index)];
-    },
-    onInput(column, index, e) {
-      if (e.isComposing || this.composingPath === this.path(column, index)) return;
-      let value = e.target.value;
-      if (column.kind === "number") {
-        value = value.replace(/\D/g, "");
-        e.target.value = value;
-      }
-      this.setValue(column, index, value);
-    },
-    onCompositionStart(column, index) {
-      this.composingPath = this.path(column, index);
-    },
-    onCompositionEnd(column, index, e) {
-      this.composingPath = "";
-      let value = e.target.value;
-      if (column.kind === "number") {
-        value = value.replace(/\D/g, "");
-        e.target.value = value;
-      }
-      this.setValue(column, index, value);
     },
     isMonth(column) {
       return column.name === "commitment_months";
@@ -220,12 +241,11 @@ CCCD.components.SubscriberTable = {
               <td class="subscriber-table__index"><span>{{ rowIndex + 1 }}</span></td>
               <td v-for="column in field.columns" :key="column.name">
                 <div class="subscriber-table__input-wrap" :data-invalid="!!error(column, rowIndex)">
-                  <input class="subscriber-table__input" type="text"
+                  <composition-safe-control class="subscriber-table__input"
+                    :numeric="column.kind === 'number'"
                     :inputmode="column.kind === 'number' ? 'numeric' : 'text'"
-                    :placeholder="placeholder(column)" :value="value(column, rowIndex)"
-                    @input="onInput(column, rowIndex, $event)"
-                    @compositionstart="onCompositionStart(column, rowIndex)"
-                    @compositionend="onCompositionEnd(column, rowIndex, $event)">
+                    :placeholder="placeholder(column)" :model-value="value(column, rowIndex)"
+                    @update:model-value="setValue(column, rowIndex, $event)" />
                   <span v-if="suffix(column)" class="subscriber-table__suffix">{{ suffix(column) }}</span>
                 </div>
                 <div v-if="error(column, rowIndex)" class="field__error">{{ error(column, rowIndex) }}</div>
@@ -292,9 +312,6 @@ CCCD.components.SectionedForm = {
 CCCD.components.PrepaidSimTable = {
   props: { layout: Object, root: Object },
   emits: ["open-calendar"],
-  data() {
-    return { composingPath: "" };
-  },
   computed: {
     rows() {
       if (!Array.isArray(this.root.prepaid_subscribers) || !this.root.prepaid_subscribers.length) {
@@ -319,28 +336,6 @@ CCCD.components.PrepaidSimTable = {
       if (index === 0 && column.name === "subscriber_number") this.root.subscriber_number = value;
       if (index === 0 && column.name === "sim_serial") this.root.sim_serial = value;
       if (index === 0 && column.name === "activation_date") this.root.activation_date = value;
-    },
-    onInput(column, index, event) {
-      const path = `prepaid_subscribers.${index}.${column.name}`;
-      if (event.isComposing || this.composingPath === path) return;
-      let value = event.target.value;
-      if (column.kind === "number") {
-        value = value.replace(/\D/g, "");
-        event.target.value = value;
-      }
-      this.setValue(column, index, value);
-    },
-    onCompositionStart(column, index) {
-      this.composingPath = `prepaid_subscribers.${index}.${column.name}`;
-    },
-    onCompositionEnd(column, index, event) {
-      this.composingPath = "";
-      let value = event.target.value;
-      if (column.kind === "number") {
-        value = value.replace(/\D/g, "");
-        event.target.value = value;
-      }
-      this.setValue(column, index, value);
     },
     addRow() {
       if (this.rows.length < this.layout.max_rows) {
@@ -381,14 +376,13 @@ CCCD.components.PrepaidSimTable = {
               <td class="subscriber-table__index"><span>{{ rowIndex + 1 }}</span></td>
               <td v-for="column in layout.columns" :key="column.name">
                 <div class="subscriber-table__input-wrap" :data-invalid="!!error(column, rowIndex)">
-                  <input class="subscriber-table__input" type="text"
+                  <composition-safe-control class="subscriber-table__input"
+                    :numeric="column.kind === 'number'"
                     :readonly="column.kind === 'date'" :inputmode="column.kind === 'number' ? 'numeric' : 'text'"
                     :placeholder="column.kind === 'date' ? 'dd/mm/yyyy' : 'Nhập ' + column.label.toLowerCase()"
-                    :value="value(column, rowIndex)"
-                    @input="onInput(column, rowIndex, $event)"
-                    @compositionstart="onCompositionStart(column, rowIndex)"
-                    @compositionend="onCompositionEnd(column, rowIndex, $event)"
-                    @click="column.kind === 'date' && openDate(column, rowIndex, $event)">
+                    :model-value="value(column, rowIndex)"
+                    @update:model-value="setValue(column, rowIndex, $event)"
+                    @click="column.kind === 'date' && openDate(column, rowIndex, $event)" />
                 </div>
                 <div v-if="error(column, rowIndex)" class="field__error">{{ error(column, rowIndex) }}</div>
               </td>

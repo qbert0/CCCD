@@ -65,8 +65,6 @@ class TransferForm(BaseDocumentForm):
         for label_text, name, required, input_kind in FIELDS:
             self.add_field(label_text, name, required=required, input_kind=input_kind)
 
-        self.fields["source_contract_number"].changed.connect(self._refresh_contract_requirement)
-        self._refresh_contract_requirement()
         self._pack_rows()
 
     def _pack_rows(self) -> None:
@@ -74,11 +72,6 @@ class TransferForm(BaseDocumentForm):
         widget = lambda item: self.payment_group if item is PAYMENT_METHOD_ITEM else self.fields[item]
         place_rows(self.primary_grid, [[(widget(item), span) for item, span in row] for row in rows])
         self.detail_toggle.hide()
-
-    def _refresh_contract_requirement(self) -> None:
-        self.fields["source_contract_date"].set_required(
-            bool(self.fields["source_contract_number"].value())
-        )
 
     def values(self) -> dict[str, str]:
         return {
@@ -90,4 +83,3 @@ class TransferForm(BaseDocumentForm):
     def reset_values(self) -> None:
         super().reset_values()
         self.payment_method.setCurrentIndex(0)
-        self._refresh_contract_requirement()

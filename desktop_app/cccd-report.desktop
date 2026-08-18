@@ -4,8 +4,12 @@ Version=1.0
 Name=CCCD Report
 GenericName=Đọc CCCD và tạo tài liệu
 Comment=Đọc thông tin CCCD, kiểm tra và tạo tài liệu theo mẫu
-Exec=/run/media/qbert/1C8099B8809998BA/codedao/CCCD/product/CCCDReport/CCCDReport
+Exec=env QT_IM_MODULE=fcitx GTK_IM_MODULE=fcitx XMODIFIERS=@im=fcitx /run/media/qbert/1C8099B8809998BA/codedao/CCCD/product/CCCDReport/CCCDReport
 Icon=/run/media/qbert/1C8099B8809998BA/codedao/CCCD/desktop_app/assets/icon.svg
 Terminal=false
 Categories=Office;
 StartupNotify=true
+# QT_IM_MODULE/GTK_IM_MODULE/XMODIFIERS above: app menu launchers (unlike a
+# terminal shell) don't source ~/.bashrc /~/.xprofile, so the embedded
+# QtWebEngine/Chromium input field never attaches to fcitx and Vietnamese
+# IME composition (Telex/VNI) silently does nothing. Wire it explicitly here.

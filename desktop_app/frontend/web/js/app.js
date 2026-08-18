@@ -509,8 +509,9 @@
               </disclosure>
               <div class="field" style="margin-top: var(--space-sm);" v-if="documentTabLayout.notes_field">
                 <label class="field__label">{{ documentTabLayout.notes_field.label }}</label>
-                <textarea class="field__control" style="max-height:76px;" :placeholder="documentTabLayout.notes_field.placeholder"
-                  v-model="state.notes"></textarea>
+                <composition-safe-control multiline class="field__control" style="max-height:76px;"
+                  :placeholder="documentTabLayout.notes_field.placeholder" :model-value="state.notes"
+                  @update:model-value="state.notes = $event" />
               </div>
             </div>
 
@@ -591,6 +592,7 @@
   // for every component at once instead of repeating a `computed: { CCCD:
   // () => CCCD }` on each one that needs it (ToastStack, FieldInput, ...).
   app.config.globalProperties.CCCD = CCCD;
+  app.component("CompositionSafeControl", CCCD.components.CompositionSafeControl);
   app.component("FieldInput", CCCD.components.FieldInput);
   app.component("CheckboxGroup", CCCD.components.CheckboxGroup);
   app.component("SubscriberTable", CCCD.components.SubscriberTable);

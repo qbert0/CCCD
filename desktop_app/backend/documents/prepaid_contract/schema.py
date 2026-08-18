@@ -19,16 +19,14 @@ class PrepaidContractSchema:
             return [
                 *organization_information_required("customer"),
                 *personal_information_required("representative"),
-                "representative.representative_position", "representative.phone",
-                *personal_information_required("new_owner"), "new_owner.phone",
+                "representative.representative_position",
+                *personal_information_required("new_owner"),
                 "provider_unit_address", "provider_representative",
-                "service_point_name", "staff_name", "service_point_address",
-                "service_point_phone", "registration_time",
+                "staff_name", "service_point_address", "service_point_phone",
             ]
         paths = [
             "document_date", "subscriber_number", *party_required("customer", data.customer),
-            "customer.phone", "service_point_name", "staff_name", "shop_address", "shop_phone",
-            "registration_time", "sim_serial", "activation_date",
+            "staff_name", "shop_address", "shop_phone", "sim_serial", "activation_date",
         ]
         if data.customer.entity_type == "Tổ chức":
             paths += [

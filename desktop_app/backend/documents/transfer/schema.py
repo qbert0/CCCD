@@ -34,12 +34,6 @@ class TransferSchema:
     @classmethod
     def validate(cls, data: ReportData) -> list[FieldError]:
         errors = required_errors(data, cls.required_paths(data))
-        if not (data.source_contract_number.strip() or data.registration_form_date.strip()):
-            errors.append(FieldError("source_contract_number", "Cần nhập số hợp đồng hoặc ngày Phiếu đăng ký dịch vụ"))
-        if data.source_contract_number.strip() and not data.source_contract_date.strip():
-            errors.append(FieldError("source_contract_date", "Ngày hợp đồng là bắt buộc khi đã nhập số hợp đồng"))
-        if data.source_contract_date.strip() and not data.source_contract_number.strip():
-            errors.append(FieldError("source_contract_number", "Số hợp đồng là bắt buộc khi đã nhập ngày hợp đồng"))
         transfer_hour = str(data.transfer_time or "").strip()
         if transfer_hour and (
             not re.fullmatch(r"\d{1,2}", transfer_hour)

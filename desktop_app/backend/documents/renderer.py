@@ -70,6 +70,39 @@ def _iter_paragraphs(document: Document) -> Iterable[Paragraph]:
 _PLACEHOLDER = re.compile(r"{{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*}}")
 
 
+def _empty_field_placeholder(name: str) -> str:
+    """Return a readable dotted blank sized for the field's meaning."""
+    lowered = str(name or "").casefold()
+    if lowered.endswith(("_day", "_month")):
+        length = 4
+    elif lowered.endswith("_year"):
+        length = 6
+    elif any(part in lowered for part in ("address", "headquarters")):
+        length = 36
+    elif any(part in lowered for part in ("name", "representative", "issue_place")):
+        length = 28
+    elif any(part in lowered for part in ("email", "other_contact", "authorization")):
+        length = 24
+    elif any(part in lowered for part in ("id", "phone", "number", "serial", "code")):
+        length = 16
+    elif any(part in lowered for part in ("date", "birth", "time")):
+        length = 12
+    else:
+        length = 16
+    return "." * length
+
+
+def _document_field_text(name: str, value: object, *, dotted_when_empty: bool = True) -> str:
+    text = str(value or "")
+    if text.strip():
+        return text
+    return _empty_field_placeholder(name) if dotted_when_empty else ""
+
+
+def _paragraph_is_in_table(paragraph: Paragraph) -> bool:
+    return any(ancestor.tag == qn("w:tc") for ancestor in paragraph._p.iterancestors())
+
+
 def _replace_placeholders(paragraph: Paragraph, context: dict[str, str]) -> None:
     """Replace tokens while retaining the formatting of the run where each starts.
 
@@ -97,10 +130,15 @@ def _replace_placeholders(paragraph: Paragraph, context: dict[str, str]) -> None
         end_offset = match.end() - positions[end_run][0]
         prefix = runs[start_run].text[:start_offset]
         suffix = runs[end_run].text[end_offset:]
+        replacement = _document_field_text(
+            name,
+            context[name],
+            dotted_when_empty=not _paragraph_is_in_table(paragraph),
+        )
         if start_run == end_run:
-            runs[start_run].text = prefix + str(context[name] or "") + suffix
+            runs[start_run].text = prefix + replacement + suffix
         else:
-            runs[start_run].text = prefix + str(context[name] or "")
+            runs[start_run].text = prefix + replacement
             for index in range(start_run + 1, end_run):
                 runs[index].text = ""
             runs[end_run].text = suffix
@@ -212,7 +250,7 @@ def _docx_context(data: ReportData) -> dict[str, str]:
     if data.source_contract_number:
         transfer_basis.append(
             "Căn cứ hợp đồng cung cấp và sử dụng dịch vụ thông tin di động mặt đất "
-            f"Vietnamobile (hình thức thanh toán {data.payment_method}) số: "
+            f"Vietnamobile (hình thức thanh toán {dotted(data.payment_method, 12)}) số: "
             f"{data.source_contract_number}, ngày {contract_day} tháng {contract_month} năm {contract_year}"
         )
     if data.registration_form_date:
@@ -366,14 +404,17 @@ def _docx_context(data: ReportData) -> dict[str, str]:
         "new_owner_address": new_owner.address,
         "new_owner_nationality": new_owner.nationality,
         "subscriber_number": data.subscriber_number,
-        "transfer_contract_basis": "- " + "; ".join(transfer_basis) + " (sau đây gọi chung là “Hợp đồng”).",
+        "transfer_contract_basis": (
+            "- " + ("; ".join(transfer_basis) if transfer_basis else "." * 48)
+            + " (sau đây gọi chung là “Hợp đồng”)."
+        ),
         "transfer_document_intro": (
             f"Hôm nay, ngày {day} tháng {month} năm {year}, các bên thỏa thuận ký kết biên bản "
             "chuyển quyền sử dụng dịch vụ thông tin di động mặt đất và thanh lý hợp đồng (“Biên bản”) như sau:"
         ),
         "transfer_agreement_intro": (
             f"Bên A, Bên B và bên thứ ba (“Bên C”) đồng ý Bên A sẽ chuyển quyền sử dụng số thuê bao "
-            f"{data.subscriber_number} cho Bên C theo các thông tin như sau:"
+            f"{dotted(data.subscriber_number, 16)} cho Bên C theo các thông tin như sau:"
         ),
         "transfer_effective_sentence": (
             "Thời điểm thanh lý Hợp đồng và chuyển quyền sử dụng số thuê bao nói trên sẽ từ "
@@ -418,12 +459,16 @@ def _docx_context(data: ReportData) -> dict[str, str]:
         "prepaid_individual_email": individual(prepaid_individual.email),
         "prepaid_individual_other_contact": individual(prepaid_individual.other_contact),
         "prepaid_individual_nationality": individual(
-            f"{CHECKED_BOX} Việt Nam    {EMPTY_BOX} Nước ngoài"
-            if prepaid_individual.nationality.casefold() == "việt nam"
-            else (
-                f"{EMPTY_BOX} Việt Nam    {CHECKED_BOX} Nước ngoài: "
-                f"{prepaid_individual.foreign_country or prepaid_individual.nationality}"
+            (
+                f"{CHECKED_BOX} Việt Nam    {EMPTY_BOX} Nước ngoài"
+                if prepaid_individual.nationality.casefold() == "việt nam"
+                else (
+                    f"{EMPTY_BOX} Việt Nam    {CHECKED_BOX} Nước ngoài: "
+                    f"{prepaid_individual.foreign_country or prepaid_individual.nationality}"
+                )
             )
+            if prepaid_individual.nationality.strip()
+            else ""
         ),
     }
 
@@ -445,14 +490,18 @@ def _prepaid_rows(data: ReportData) -> list[dict[str, str]]:
     }]
 
 
-def _set_cell_text_preserving_style(cell, value: str) -> None:
+def _set_cell_text_preserving_style(cell, value: str, field_name: str = "") -> None:
     paragraph = cell.paragraphs[0]
+    text = (
+        _document_field_text(field_name, value, dotted_when_empty=False)
+        if field_name else str(value or "")
+    )
     if paragraph.runs:
-        paragraph.runs[0].text = str(value or "")
+        paragraph.runs[0].text = text
         for run in paragraph.runs[1:]:
             run.text = ""
     else:
-        paragraph.add_run(str(value or ""))
+        paragraph.add_run(text)
 
 
 def _fill_prepaid_sim_table(document: Document, data: ReportData) -> None:
@@ -469,7 +518,7 @@ def _fill_prepaid_sim_table(document: Document, data: ReportData) -> None:
                 table_row.cells,
                 ("subscriber_number", "sim_serial", "activation_date"),
             ):
-                _set_cell_text_preserving_style(cell, values.get(name, ""))
+                _set_cell_text_preserving_style(cell, values.get(name, ""), name)
         break
 
 
@@ -565,7 +614,7 @@ def _fill_beautiful_number_table(document: Document, data: ReportData) -> None:
             for cell, name in zip(
                 cells[1:], ("subscriber_number", "commitment_months", "monthly_fee", "commitment_note")
             ):
-                _set_cell_text_preserving_style(cell, values.get(name, ""))
+                _set_cell_text_preserving_style(cell, values.get(name, ""), name)
         break
 
 
@@ -576,12 +625,13 @@ def _replace_service_point_address(document: Document, data: ReportData) -> None
         if "Địa chỉ điểm giao dịch:" not in paragraph.text:
             continue
         prefix = paragraph.text.split("Địa chỉ điểm giao dịch:", 1)[0] + "Địa chỉ điểm giao dịch:"
+        address = _document_field_text("service_point_address", data.service_point_address)
         if paragraph.runs:
-            paragraph.runs[0].text = prefix + data.service_point_address
+            paragraph.runs[0].text = prefix + address
             for run in paragraph.runs[1:]:
                 run.text = ""
         else:
-            paragraph.add_run(prefix + data.service_point_address)
+            paragraph.add_run(prefix + address)
         break
 
 
@@ -618,6 +668,8 @@ def _generate_docx(
     template: Path,
     output: Path,
     expected_placeholders: frozenset[str],
+    *,
+    allow_missing_placeholders: bool = False,
 ) -> None:
     document = Document(str(template))
     template_paragraphs = list(_iter_paragraphs(document))
@@ -626,15 +678,16 @@ def _generate_docx(
         for paragraph in template_paragraphs
         for match in _PLACEHOLDER.finditer(paragraph.text)
     }
-    if expected_placeholders and actual_placeholders != expected_placeholders:
+    if expected_placeholders:
         missing = sorted(expected_placeholders - actual_placeholders)
         unexpected = sorted(actual_placeholders - expected_placeholders)
         details = []
-        if missing:
+        if missing and not allow_missing_placeholders:
             details.append("thiếu: " + ", ".join(missing))
         if unexpected:
             details.append("không hỗ trợ: " + ", ".join(unexpected))
-        raise ValueError("Placeholder trong file mẫu không đúng (" + "; ".join(details) + ")")
+        if details:
+            raise ValueError("Placeholder trong file mẫu không đúng (" + "; ".join(details) + ")")
     malformed = []
     for paragraph in template_paragraphs:
         residue = _PLACEHOLDER.sub("", paragraph.text)
@@ -976,9 +1029,17 @@ def render_document(
     template: Path,
     output: Path,
     expected_placeholders: frozenset[str] = frozenset(),
+    *,
+    allow_missing_placeholders: bool = False,
 ) -> None:
     """Render one document; routing and lifecycle live in document modules."""
     if output.suffix.casefold() == ".docx":
-        _generate_docx(data, template, output, expected_placeholders)
+        _generate_docx(
+            data,
+            template,
+            output,
+            expected_placeholders,
+            allow_missing_placeholders=allow_missing_placeholders,
+        )
     else:
         _generate_pdf(data, template, output)
