@@ -3,19 +3,29 @@ from __future__ import annotations
 import io
 import os
 import re
+from copy import deepcopy
 from pathlib import Path
 from typing import Iterable
 
 from docx import Document
+from docx.dml.color import RGBColor
 from docx.oxml.ns import qn
 from docx.shared import Pt
 from docx.text.paragraph import Paragraph
+from docx.text.run import Run
 from pypdf import PdfReader, PdfWriter
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
 from desktop_app.backend.domain.models import DocumentType, ReportData
+
+
+# Keep empty choices as an outlined square, but use a real check mark for the
+# selected choice.  The previous ballot-box X looked like an error/cancellation.
+EMPTY_BOX = "☐"
+CHECKED_BOX = "☑"
+PDF_CHECKMARK = "✓"
 
 
 def _date_parts(value: str) -> tuple[str, str, str]:
@@ -89,18 +99,82 @@ def _replace_placeholders(paragraph: Paragraph, context: dict[str, str]) -> None
             runs[end_run].text = suffix
 
 
+_BOX_GLYPH = "☐"  # U+2610, outline only -- renders as a hollow square in virtually any font
+_CHECK_GLYPH = "✓"  # U+2713, drawn oversized and pulled back over the box via negative spacing
+
+
+def _set_symbol_font(run: Run, size: Pt, spacing_twips: int | None = None, bold: bool = False) -> None:
+    run.bold = bold
+    run.font.name = "Segoe UI Symbol"
+    run.font.size = size
+    run.font.color.rgb = RGBColor(0, 0, 0)
+    fonts = run._r.get_or_add_rPr().get_or_add_rFonts()
+    for key in ("ascii", "hAnsi", "eastAsia", "cs"):
+        fonts.set(qn(f"w:{key}"), "Segoe UI Symbol")
+    if spacing_twips is not None:
+        # w:spacing is in twentieths of a point; negative pulls the
+        # character back toward the one before it (here: onto the box).
+        rpr = run._r.get_or_add_rPr()
+        spacing_el = rpr.makeelement(qn("w:spacing"), {qn("w:val"): str(spacing_twips)})
+        rpr.append(spacing_el)
+
+
+def _style_docx_checkbox_symbols(paragraph: Paragraph) -> None:
+    """Render checkboxes as monochrome line glyphs, never colored emoji/icons.
+
+    A checked box is drawn as two runs -- the same hollow box glyph as an
+    unchecked one, then an oversized checkmark pulled back on top of it via
+    negative character spacing -- rather than the single U+2611 "BALLOT BOX
+    WITH CHECK" glyph, whose filled-square rendering varies badly by font/
+    platform (looked like a solid painted box instead of a checked outline).
+    """
+    for run in list(paragraph.runs):
+        if CHECKED_BOX not in run.text and EMPTY_BOX not in run.text:
+            continue
+        parts = re.split(
+            f"({re.escape(CHECKED_BOX)}|{re.escape(EMPTY_BOX)})",
+            run.text,
+        )
+        run.text = parts[0]
+        anchor = run._r
+        for part in parts[1:]:
+            if not part:
+                continue
+            if part == CHECKED_BOX:
+                box_element = deepcopy(run._r)
+                box_run = Run(box_element, paragraph)
+                box_run.text = _BOX_GLYPH
+                anchor.addnext(box_element)
+                _set_symbol_font(box_run, Pt(15))
+
+                check_element = deepcopy(run._r)
+                check_run = Run(check_element, paragraph)
+                check_run.text = _CHECK_GLYPH
+                box_element.addnext(check_element)
+                # Bold and clearly larger than the box. Tried pulling it
+                # fully on top of the box via a large negative w:spacing (up
+                # to -600 twips); LibreOffice -- the only renderer available
+                # here to verify against -- never visibly overlaps them, so
+                # this only nudges it slightly closer rather than gambling
+                # on an overlap that's unverified in real Word.
+                _set_symbol_font(check_run, Pt(20), spacing_twips=-60, bold=True)
+                anchor = check_element
+            else:
+                new_element = deepcopy(run._r)
+                new_run = Run(new_element, paragraph)
+                new_run.text = part
+                anchor.addnext(new_element)
+                anchor = new_element
+                if part == EMPTY_BOX:
+                    _set_symbol_font(new_run, Pt(15))
+
+
 def _docx_context(data: ReportData) -> dict[str, str]:
     customer, new_owner = data.customer, data.new_owner
     is_organization = customer.entity_type == "Tổ chức"
     day, month, year = _date_parts(data.document_date)
     def authorization(person) -> str:
         return " - ".join(value for value in (person.authorization_number, person.authorization_date) if value)
-
-    def choice(label: str) -> str:
-        return f"{'☒' if data.service_action == label else '☐'} {label}"
-
-    def selected_value(action: str, value: str, blank: str = "……………………") -> str:
-        return value if data.service_action == action else blank
 
     def organization(value: str) -> str:
         return value if is_organization else ""
@@ -111,9 +185,27 @@ def _docx_context(data: ReportData) -> dict[str, str]:
     def party_organization(person, value: str) -> str:
         return value if person.entity_type == "Tổ chức" else ""
 
+    def dotted(value: str, length: int = 20) -> str:
+        text = str(value or "").strip()
+        return text if text else "." * length
+
+    def action_value(action: str, value: str, length: int = 20) -> str:
+        return dotted(value, length) if data.service_action == action else "." * length
+
+    def choice_mark(selected: bool) -> str:
+        return CHECKED_BOX if selected else EMPTY_BOX
+
+    # Up to 3 ordered organization contact numbers, joined into the single
+    # "Điện thoại: ..." slot every template already has -- shop_phone_2/3
+    # simply don't add anything to the line when left blank.
+    organization_phones = " - ".join(
+        value for value in (data.shop_phone, data.shop_phone_2, data.shop_phone_3) if value
+    )
+
     effective_day, effective_month, effective_year = _date_parts(data.transfer_effective_date)
     contract_day, contract_month, contract_year = _date_parts(data.source_contract_date)
     form_day, form_month, form_year = _date_parts(data.registration_form_date)
+    aftersale_day, aftersale_month, aftersale_year = _date_parts(data.document_date)
     transfer_basis = []
     if data.source_contract_number:
         transfer_basis.append(
@@ -129,7 +221,52 @@ def _docx_context(data: ReportData) -> dict[str, str]:
 
     return {
         "document_date_line": f"Ngày {day} tháng {month} năm {year}",
-        "aftersale_document_date_line": f"Ngày {day} tháng {month} năm {year}",
+        # Aftersale keeps every legal sentence in the DOCX.  These values only
+        # fill individual blanks; missing values deliberately become dotted lines.
+        "aftersale_day": dotted(aftersale_day, 4),
+        "aftersale_month": dotted(aftersale_month, 4),
+        "aftersale_year": dotted(aftersale_year, 6),
+        "aftersale_shop_name": dotted(data.shop_name, 32),
+        "aftersale_shop_address": dotted(data.shop_address, 42),
+        "aftersale_shop_phone": dotted(organization_phones, 24),
+        "aftersale_customer_name": dotted(customer.display_name().upper(), 46),
+        "aftersale_customer_id_number": dotted(customer.id_number, 18),
+        "aftersale_customer_issue_date": dotted(customer.issue_date, 14),
+        "aftersale_customer_issue_place": dotted(customer.issue_place, 26),
+        "aftersale_customer_address": dotted(customer.address, 48),
+        "aftersale_customer_phone": dotted(customer.phone, 24),
+        "id_attachment_mark": choice_mark(data.has_id_attachment),
+        "sim_attachment_mark": choice_mark(data.has_original_sim),
+        "other_attachment_mark": choice_mark(bool(data.other_attachment.strip())),
+        "other_attachment_value": dotted(data.other_attachment, 48),
+        "update_information_mark": choice_mark(data.service_action == "Cập nhật thông tin"),
+        "update_subscriber_number": action_value(
+            "Cập nhật thông tin", data.subscriber_number, 30
+        ),
+        "replace_sim_mark": choice_mark(data.service_action == "Thay SIM"),
+        "replace_sim_subscriber_number": action_value("Thay SIM", data.subscriber_number, 30),
+        "transfer_mark": choice_mark(data.service_action == "Chuyển chủ quyền"),
+        "transfer_subscriber_number": action_value(
+            "Chuyển chủ quyền", data.subscriber_number, 22
+        ),
+        "transfer_new_owner_name": action_value(
+            "Chuyển chủ quyền", new_owner.display_name().upper(), 28
+        ),
+        "transfer_new_owner_id_number": action_value(
+            "Chuyển chủ quyền", new_owner.id_number, 20
+        ),
+        "transfer_new_owner_issue_date": action_value(
+            "Chuyển chủ quyền", new_owner.issue_date, 14
+        ),
+        "transfer_new_owner_issue_place": action_value(
+            "Chuyển chủ quyền", new_owner.issue_place, 24
+        ),
+        "requester_role_mark": choice_mark(data.service_action != "Chuyển chủ quyền"),
+        "new_owner_role_mark": choice_mark(data.service_action == "Chuyển chủ quyền"),
+        "common_subscriber_number": dotted(data.subscriber_number, 24),
+        "backup_phone_1_line": dotted(data.backup_phone_1 or customer.phone, 20),
+        "backup_phone_2_line": dotted(data.backup_phone_2, 20),
+        "aftersale_staff_name": dotted(data.staff_name, 24),
         "document_day": f" {day}",
         "document_month": month,
         "document_year": year,
@@ -147,7 +284,9 @@ def _docx_context(data: ReportData) -> dict[str, str]:
         "transfer_effective_year": effective_year,
         "shop_name": data.shop_name,
         "shop_address": data.shop_address,
-        "shop_phone": data.shop_phone,
+        "shop_phone": organization_phones,
+        "customer_signature_name": customer.display_name().upper(),
+        "new_owner_signature_name": new_owner.display_name().upper(),
         "customer_name": customer.display_name().upper(),
         "customer_headquarters": party_organization(customer, customer.headquarters_address),
         "customer_business_number": party_organization(customer, customer.business_registration_number),
@@ -186,48 +325,6 @@ def _docx_context(data: ReportData) -> dict[str, str]:
             f"{data.transfer_time or '……'} giờ, ngày {effective_day} tháng {effective_month} "
             f"năm {effective_year} (“Thời điểm Chuyển quyền”)."
         ),
-        "attachment_checkboxes": (
-            f"{'☒' if data.has_id_attachment else '☐'} CCCD/CMND    "
-            f"{'☒' if data.has_original_sim else '☐'} SIM gốc"
-        ),
-        "other_attachment_line": f"{'☒' if data.other_attachment else '☐'} Giấy tờ khác: {data.other_attachment}",
-        "update_information_choice": choice("Cập nhật thông tin"),
-        "replace_sim_choice": choice("Thay SIM"),
-        "transfer_choice": choice("Chuyển chủ quyền"),
-        "update_information_commitment": (
-            "Tôi xin cam kết là chủ sở hữu của số điện thoại Vietnamobile: "
-            f"{selected_value('Cập nhật thông tin', data.subscriber_number)}. "
-            "Tôi đã cung cấp cho cửa hàng SIM gốc và cam kết thuê bao không vướng bất kỳ tranh chấp nào."
-        ),
-        "replace_sim_commitment": (
-            "Tôi xin cam kết là chủ sở hữu của số điện thoại Vietnamobile: "
-            f"{selected_value('Thay SIM', data.subscriber_number)}. Trong trường hợp xảy ra bất kỳ "
-            "tranh chấp về việc thay SIM cho số thuê bao này, tôi cam đoan sẽ phối hợp với "
-            "Vietnamobile để giải quyết."
-        ),
-        "aftersale_transfer_commitment": (
-            "Tôi đồng ý thanh lý Hợp đồng cung cấp và sử dụng dịch vụ thông tin di động mặt đất "
-            f"Vietnamobile của thuê bao {selected_value('Chuyển chủ quyền', data.subscriber_number)} và "
-            "chuyển quyền sử dụng số thuê bao này và dịch vụ điện thoại di động trả trước cho "
-            f"{selected_value('Chuyển chủ quyền', new_owner.display_name())}, số CMND/CCCD "
-            f"{selected_value('Chuyển chủ quyền', new_owner.id_number)}, ngày cấp "
-            f"{selected_value('Chuyển chủ quyền', new_owner.issue_date)}, nơi cấp "
-            f"{selected_value('Chuyển chủ quyền', new_owner.issue_place)} (“Chủ thuê bao mới”)."
-        ),
-        "aftersale_common_commitment": (
-            f"Tôi ({'☐ Người yêu cầu hoặc ☒ Chủ thuê bao mới' if data.service_action == 'Chuyển chủ quyền' else '☒ Người yêu cầu hoặc ☐ Chủ thuê bao mới'}) "
-            f"là chủ sở hữu của số thuê bao {data.subscriber_number}. Tôi đã được nhân viên tư vấn đầy đủ "
-            "về các quyền và nghĩa vụ của gói cước đi kèm số thuê bao này và tôi đồng ý tiếp tục sử dụng "
-            "và thực hiện các cam kết của gói cước theo quy định của Vietnamobile."
-        ),
-        "backup_phone_commitment": (
-            "Tôi đồng ý để Vietnamobile thu hồi lại số thuê bao vô điều kiện hoặc áp dụng các biện pháp "
-            "khác trong trường hợp tôi vi phạm điều khoản đã cam kết hoặc có bất kỳ khiếu nại nào từ chủ "
-            "thuê bao cũ và/hoặc bên thứ ba khác và Vietnamobile không liên hệ được với tôi qua số điện "
-            f"thoại 1: {data.backup_phone_1 or customer.phone} hoặc số điện thoại 2: {data.backup_phone_2} "
-            "trong vòng 24 giờ. Tôi cam đoan sẽ phối hợp với Vietnamobile để giải quyết và chấp nhận quyết "
-            "định cuối cùng của Vietnamobile."
-        ),
         "contract_number": data.contract_number,
         "subscriber_code": data.subscriber_code or data.subscriber_number,
         "sim_serial": data.sim_serial,
@@ -262,9 +359,12 @@ def _docx_context(data: ReportData) -> dict[str, str]:
         "prepaid_individual_email": individual(customer.email),
         "prepaid_individual_other_contact": individual(customer.other_contact),
         "prepaid_individual_nationality": individual(
-            "☒ Việt Nam    ☐ Nước ngoài"
+            f"{CHECKED_BOX} Việt Nam    {EMPTY_BOX} Nước ngoài"
             if customer.nationality.casefold() == "việt nam"
-            else f"☐ Việt Nam    ☒ Nước ngoài: {customer.foreign_country or customer.nationality}"
+            else (
+                f"{EMPTY_BOX} Việt Nam    {CHECKED_BOX} Nước ngoài: "
+                f"{customer.foreign_country or customer.nationality}"
+            )
         ),
     }
 
@@ -302,6 +402,7 @@ def _generate_docx(
     context = _docx_context(data)
     for paragraph in template_paragraphs:
         _replace_placeholders(paragraph, context)
+        _style_docx_checkbox_symbols(paragraph)
 
     if data.document_type == DocumentType.TRANSFER and document.tables:
         table_size = 8.5 if (
@@ -415,6 +516,10 @@ def _prepaid_commands(data: ReportData) -> dict[int, list[tuple]]:
     def individual(value: str) -> str:
         return value if not is_organization else ""
 
+    organization_phones = " - ".join(
+        value for value in (data.shop_phone, data.shop_phone_2, data.shop_phone_3) if value
+    )
+
     return {
         0: [
             (520, 58, data.contract_number, 7.5, 70, 1),
@@ -445,7 +550,8 @@ def _prepaid_commands(data: ReportData) -> dict[int, list[tuple]]:
             (125, 447, individual(customer.phone), 8, 120, 1),
             (310, 447, individual(customer.email), 7.5, 130, 1),
             (500, 447, individual(customer.other_contact), 7.5, 65, 1),
-            (99, 461, individual("X") if customer.nationality.casefold() == "việt nam" else "", 9, 12, 1),
+            # Draw a large tick over the checkbox already present in the PDF.
+            (98, 458, individual(PDF_CHECKMARK) if customer.nationality.casefold() == "việt nam" else "", 13, 16, 1),
             (390, 461, individual(customer.foreign_country), 7.5, 165, 1),
             (80, 545, data.shop_address, 7.5, 470, 1),
             (115, 559, data.provider_representative, 7.5, 250, 1),
@@ -455,7 +561,7 @@ def _prepaid_commands(data: ReportData) -> dict[int, list[tuple]]:
         ],
         1: [
             (150, 56, data.shop_address, 7.5, 410, 1),
-            (195, 70, data.shop_phone, 7.5, 365, 1),
+            (195, 70, organization_phones, 7.5, 365, 1),
             (255, 84, data.registration_time, 7.5, 300, 1),
             (78, 202, data.subscriber_number, 8, 120, 1),
             (245, 202, data.sim_serial, 8, 130, 1),

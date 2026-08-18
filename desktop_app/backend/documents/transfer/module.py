@@ -23,7 +23,7 @@ class TransferDocumentModule(BaseDocumentModule):
         "customer_issue_place", "new_owner_issue_place", "customer_birth_date",
         "new_owner_birth_date", "customer_address", "new_owner_address",
         "customer_nationality", "new_owner_nationality", "subscriber_number",
-        "provider_representative",
+        "provider_representative", "customer_signature_name", "new_owner_signature_name",
     })
     template = resource_path(
         "desktop_app", "backend", "documents", "transfer", "00_MAU_BIEN_BAN_CHUYEN_CHU_QUYEN.docx"

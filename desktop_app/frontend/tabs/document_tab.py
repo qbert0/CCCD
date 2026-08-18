@@ -74,7 +74,13 @@ class _CurrentPageStackedWidget(QStackedWidget):
 
 COMMON_FIELDS = [
     ("Ngày lập tài liệu", "document_date", True, "date"),
-    ("Điện thoại cửa hàng", "shop_phone", False, "number"),
+    # Up to 3 ordered organization contact numbers, filled once and
+    # persisted (OPERATOR-tier, see field_meta.py) instead of retyped per
+    # document -- shop_phone is number 1 (kept required where it already
+    # was), shop_phone_2/3 are optional extras.
+    ("Điện thoại liên hệ 1", "shop_phone", False, "number"),
+    ("Điện thoại liên hệ 2", "shop_phone_2", False, "number"),
+    ("Điện thoại liên hệ 3", "shop_phone_3", False, "number"),
     ("Nhân viên giao dịch", "staff_name", False, "text"),
     ("Tên cửa hàng/điểm giao dịch", "shop_name", False, "text"),
     ("Địa chỉ cửa hàng", "shop_address", False, "text"),
@@ -82,13 +88,21 @@ COMMON_FIELDS = [
 COMMON_VISIBLE_BY_TYPE = {
     DocumentType.TRANSFER: {"document_date"},
     DocumentType.BEAUTIFUL_NUMBER: {"document_date"},
-    DocumentType.AFTERSALE: {"document_date", "shop_name", "shop_address", "shop_phone", "staff_name"},
-    DocumentType.PREPAID_CONTRACT: {"document_date", "shop_address", "shop_phone", "staff_name"},
+    DocumentType.AFTERSALE: {
+        "document_date", "shop_name", "shop_address", "shop_phone", "shop_phone_2", "shop_phone_3", "staff_name",
+    },
+    DocumentType.PREPAID_CONTRACT: {
+        "document_date", "shop_address", "shop_phone", "shop_phone_2", "shop_phone_3", "staff_name",
+    },
 }
-# Identical to COMMON_VISIBLE_BY_TYPE today (every visible common field also
-# happens to be required) -- kept as its own dict since visibility and
-# required-ness are conceptually independent and could diverge later.
-COMMON_REQUIRED_BY_TYPE = COMMON_VISIBLE_BY_TYPE
+# shop_phone_2/shop_phone_3 are visible wherever shop_phone is, but never
+# required -- "tối đa 3 số, các số còn lại có thể bỏ" (up to 3 numbers, the
+# rest are optional). Every other visible common field is also required,
+# same as before.
+COMMON_REQUIRED_BY_TYPE = {
+    document_type: names - {"shop_phone_2", "shop_phone_3"}
+    for document_type, names in COMMON_VISIBLE_BY_TYPE.items()
+}
 # Sentinel item name for Transfer's payment-method selector, packed onto the
 # common row alongside "Ngày lập tài liệu" -- not a COMMON_FIELDS entry, same
 # pattern as person_form.ENTITY_TYPE_ITEM.

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import asdict, dataclass, field
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 
 
@@ -99,7 +99,12 @@ class ReportData:
     contract_number: str = ""
     shop_name: str = "Vietnamobile"
     shop_address: str = ""
+    # Up to 3 ordered organization contact numbers -- filled once (persisted
+    # across cases, same as staff_name) rather than retyped per document.
+    # shop_phone is number 1; shop_phone_2/3 are optional extras.
     shop_phone: str = ""
+    shop_phone_2: str = ""
+    shop_phone_3: str = ""
     staff_name: str = ""
     backup_phone_1: str = ""
     backup_phone_2: str = ""
@@ -108,10 +113,10 @@ class ReportData:
     service_action: str = "Cập nhật thông tin"
     payment_method: str = "Trả trước"
     source_contract_number: str = ""
-    source_contract_date: str = ""
-    registration_form_date: str = ""
-    transfer_time: str = ""
-    transfer_effective_date: str = ""
+    source_contract_date: str = field(default_factory=lambda: date.today().strftime("%d/%m/%Y"))
+    registration_form_date: str = field(default_factory=lambda: date.today().strftime("%d/%m/%Y"))
+    transfer_time: str = field(default_factory=lambda: datetime.now().strftime("%H:%M"))
+    transfer_effective_date: str = field(default_factory=lambda: date.today().strftime("%d/%m/%Y"))
     has_id_attachment: bool = True
     has_original_sim: bool = False
     other_attachment: str = ""

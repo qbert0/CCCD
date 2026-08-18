@@ -94,6 +94,8 @@ DOCUMENT_FIELD_META: dict[str, FieldMeta] = {
     # default from anyway. OPERATOR keeps it a plain in-form field that's
     # simply remembered for the current session, like staff_name.
     "shop_phone": FieldMeta(FieldSource.OPERATOR, FieldTier.PRIMARY, FieldWidth.SHORT),
+    "shop_phone_2": FieldMeta(FieldSource.OPERATOR, FieldTier.DETAIL, FieldWidth.SHORT),
+    "shop_phone_3": FieldMeta(FieldSource.OPERATOR, FieldTier.DETAIL, FieldWidth.SHORT),
     "staff_name": FieldMeta(FieldSource.OPERATOR, FieldTier.PRIMARY, FieldWidth.SHORT),
     "provider_representative": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
     "provider_position": FieldMeta(FieldSource.DOCUMENT, FieldTier.DETAIL, FieldWidth.SHORT),
