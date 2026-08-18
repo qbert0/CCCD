@@ -8,6 +8,7 @@ from docx.text.paragraph import Paragraph
 from pypdf import PdfReader
 
 from desktop_app.backend.documents import DocumentRegistry
+from desktop_app.backend.documents.renderer import CHECKED_BOX
 from desktop_app.backend.domain.models import DocumentType, PersonData, ReportData
 
 
@@ -160,26 +161,26 @@ class DocumentTest(unittest.TestCase):
             data.service_action = "Chuyển chủ quyền"
             output = self.registry.for_data(data).generate(data, Path(folder))
             text = docx_text(output)
-            self.assertIn("☐✓ Chuyển chủ quyền", text)
+            self.assertIn("☑ Chuyển chủ quyền", text)
             self.assertIn("☐ Cập nhật thông tin", text)
             self.assertIn("☐ Thay SIM", text)
             self.assertRegex(text, r"Vietnamobile: \.{20,}")
             self.assertIn("cho Ông/Bà TRẦN THỊ B", text)
 
             document = Document(output)
-            # A checked box renders as two runs -- the same hollow "☐" box
-            # glyph as an unchecked one, then an oversized "✓" pulled back
-            # onto it -- rather than the single U+2611 glyph, whose filled
-            # rendering varies badly by font/platform.
+            # DejaVu Sans (bundled with LibreOffice) draws U+2611 as a hollow
+            # outline box with a small check actually inside it -- verified
+            # by rendering a real generated document -- unlike most fonts,
+            # which fall back to a colored, filled-looking emoji glyph.
             check_runs = [
                 run
                 for paragraph in document.paragraphs
                 for run in paragraph.runs
-                if run.text == "✓"
+                if run.text == CHECKED_BOX
             ]
             self.assertTrue(check_runs)
-            self.assertTrue(all(run.font.size and run.font.size.pt == 20 for run in check_runs))
-            self.assertTrue(all(run.bold for run in check_runs))
+            self.assertTrue(all(run.font.name == "DejaVu Sans" for run in check_runs))
+            self.assertTrue(all(run.font.size and run.font.size.pt == 15 for run in check_runs))
             signature_text = "\n".join(p.text for p in document.paragraphs[-6:])
             self.assertIn("NGƯỜI YÊU CẦU", signature_text)
             self.assertIn("CHỦ THUÊ BAO MỚI", signature_text)
@@ -225,7 +226,7 @@ class DocumentTest(unittest.TestCase):
             data.customer.foreign_country = "Nhật Bản"
             output = self.registry.for_data(data).generate(data, Path(folder))
             text = docx_text(output)
-            self.assertIn("☐ Việt Nam    ☐✓ Nước ngoài: Nhật Bản", text)
+            self.assertIn("☐ Việt Nam    ☑ Nước ngoài: Nhật Bản", text)
 
     def test_placeholder_split_across_word_runs_keeps_other_run_styles(self):
         from desktop_app.backend.documents.renderer import _replace_placeholders

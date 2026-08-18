@@ -99,34 +99,26 @@ def _replace_placeholders(paragraph: Paragraph, context: dict[str, str]) -> None
             runs[end_run].text = suffix
 
 
-_BOX_GLYPH = "☐"  # U+2610, outline only -- renders as a hollow square in virtually any font
-_CHECK_GLYPH = "✓"  # U+2713, drawn oversized and pulled back over the box via negative spacing
-
-
-def _set_symbol_font(run: Run, size: Pt, spacing_twips: int | None = None, bold: bool = False) -> None:
-    run.bold = bold
-    run.font.name = "Segoe UI Symbol"
+def _set_symbol_font(run: Run, size: Pt = Pt(15)) -> None:
+    run.bold = False
+    run.font.name = "DejaVu Sans"
     run.font.size = size
     run.font.color.rgb = RGBColor(0, 0, 0)
     fonts = run._r.get_or_add_rPr().get_or_add_rFonts()
     for key in ("ascii", "hAnsi", "eastAsia", "cs"):
-        fonts.set(qn(f"w:{key}"), "Segoe UI Symbol")
-    if spacing_twips is not None:
-        # w:spacing is in twentieths of a point; negative pulls the
-        # character back toward the one before it (here: onto the box).
-        rpr = run._r.get_or_add_rPr()
-        spacing_el = rpr.makeelement(qn("w:spacing"), {qn("w:val"): str(spacing_twips)})
-        rpr.append(spacing_el)
+        fonts.set(qn(f"w:{key}"), "DejaVu Sans")
 
 
 def _style_docx_checkbox_symbols(paragraph: Paragraph) -> None:
     """Render checkboxes as monochrome line glyphs, never colored emoji/icons.
 
-    A checked box is drawn as two runs -- the same hollow box glyph as an
-    unchecked one, then an oversized checkmark pulled back on top of it via
-    negative character spacing -- rather than the single U+2611 "BALLOT BOX
-    WITH CHECK" glyph, whose filled-square rendering varies badly by font/
-    platform (looked like a solid painted box instead of a checked outline).
+    A single U+2611/U+2610 glyph each, same as before -- the "filled/painted
+    square" look this used to have wasn't the glyph, it was the font: most
+    fonts fall back to a colored emoji-style box+check for U+2611 when they
+    don't carry it natively. DejaVu Sans (bundled with LibreOffice, verified
+    by rendering a real generated document) draws U+2611 as a hollow outline
+    box with a small check mark actually inside it -- exactly the checked
+    state's real anatomy, no manual two-run overlay needed.
     """
     for run in list(paragraph.runs):
         if CHECKED_BOX not in run.text and EMPTY_BOX not in run.text:
@@ -140,33 +132,13 @@ def _style_docx_checkbox_symbols(paragraph: Paragraph) -> None:
         for part in parts[1:]:
             if not part:
                 continue
-            if part == CHECKED_BOX:
-                box_element = deepcopy(run._r)
-                box_run = Run(box_element, paragraph)
-                box_run.text = _BOX_GLYPH
-                anchor.addnext(box_element)
-                _set_symbol_font(box_run, Pt(15))
-
-                check_element = deepcopy(run._r)
-                check_run = Run(check_element, paragraph)
-                check_run.text = _CHECK_GLYPH
-                box_element.addnext(check_element)
-                # Bold and clearly larger than the box. Tried pulling it
-                # fully on top of the box via a large negative w:spacing (up
-                # to -600 twips); LibreOffice -- the only renderer available
-                # here to verify against -- never visibly overlaps them, so
-                # this only nudges it slightly closer rather than gambling
-                # on an overlap that's unverified in real Word.
-                _set_symbol_font(check_run, Pt(20), spacing_twips=-60, bold=True)
-                anchor = check_element
-            else:
-                new_element = deepcopy(run._r)
-                new_run = Run(new_element, paragraph)
-                new_run.text = part
-                anchor.addnext(new_element)
-                anchor = new_element
-                if part == EMPTY_BOX:
-                    _set_symbol_font(new_run, Pt(15))
+            new_element = deepcopy(run._r)
+            new_run = Run(new_element, paragraph)
+            new_run.text = part
+            anchor.addnext(new_element)
+            anchor = new_element
+            if part in {CHECKED_BOX, EMPTY_BOX}:
+                _set_symbol_font(new_run)
 
 
 def _docx_context(data: ReportData) -> dict[str, str]:

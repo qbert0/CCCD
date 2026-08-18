@@ -21,8 +21,12 @@ FIELDS = [
     ("Ngày Phiếu đăng ký dịch vụ", "registration_form_date", False, "date"),
     ("Giờ chuyển quyền", "transfer_time", False, "text"),
     ("Ngày chuyển quyền có hiệu lực", "transfer_effective_date", True, "date"),
-    ("Người đại diện Bên B ký", "provider_representative", False, "text"),
 ]
+# provider_representative ("Người đại diện Bên B ký") is intentionally NOT a
+# visible row -- by explicit request, only the 3 rows below. It still exists
+# as a ReportData field and still auto-fills from the company profile (see
+# WebBridge.on_document_type_changed), just with no editable field cluttering
+# this form; the docx's "Đại diện Bên B" signature still uses it.
 
 
 def resolve_transfer_form_rows() -> dict:
@@ -35,7 +39,6 @@ def resolve_transfer_form_rows() -> dict:
     ký dịch vụ trả trước (also never auto-filled). Row 3: Giờ + Ngày chuyển
     quyền -- the moment THIS transfer itself takes effect, which really is
     "now" (see ReportData.transfer_time/transfer_effective_date defaults).
-    Row 4: Người đại diện Bên B ký.
     """
     items: list[tuple[object, FieldWidth]] = [
         (PAYMENT_METHOD_ITEM, FieldWidth.SHORT),
@@ -46,8 +49,6 @@ def resolve_transfer_form_rows() -> dict:
         (ROW_BREAK, FieldWidth.SHORT),
         ("transfer_time", FieldWidth.SHORT),
         ("transfer_effective_date", FieldWidth.SHORT),
-        (ROW_BREAK, FieldWidth.SHORT),
-        ("provider_representative", FieldWidth.SHORT),
     ]
     return {"primary_rows": resolve_rows(items), "detail_rows": [], "has_detail": False}
 
