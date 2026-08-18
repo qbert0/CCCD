@@ -19,6 +19,8 @@ from desktop_app.frontend.field_meta import (
     document_field_meta,
     pack_fields,
     persistent_document_field_names,
+    place_rows,
+    resolve_rows,
 )
 
 
@@ -70,6 +72,42 @@ class _CurrentPageStackedWidget(QStackedWidget):
             self.setFixedHeight(current.sizeHint().height())
 
 
+COMMON_FIELDS = [
+    ("Ngày lập tài liệu", "document_date", True, "date"),
+    ("Điện thoại cửa hàng", "shop_phone", False, "number"),
+    ("Nhân viên giao dịch", "staff_name", False, "text"),
+    ("Tên cửa hàng/điểm giao dịch", "shop_name", False, "text"),
+    ("Địa chỉ cửa hàng", "shop_address", False, "text"),
+]
+COMMON_VISIBLE_BY_TYPE = {
+    DocumentType.TRANSFER: {"document_date"},
+    DocumentType.BEAUTIFUL_NUMBER: {"document_date"},
+    DocumentType.AFTERSALE: {"document_date", "shop_name", "shop_address", "shop_phone", "staff_name"},
+    DocumentType.PREPAID_CONTRACT: {"document_date", "shop_address", "shop_phone", "staff_name"},
+}
+# Identical to COMMON_VISIBLE_BY_TYPE today (every visible common field also
+# happens to be required) -- kept as its own dict since visibility and
+# required-ness are conceptually independent and could diverge later.
+COMMON_REQUIRED_BY_TYPE = COMMON_VISIBLE_BY_TYPE
+# Sentinel item name for Transfer's payment-method selector, packed onto the
+# common row alongside "Ngày lập tài liệu" -- not a COMMON_FIELDS entry, same
+# pattern as person_form.ENTITY_TYPE_ITEM.
+PAYMENT_METHOD_ITEM = "payment_method"
+
+
+def resolve_common_rows(document_type: DocumentType) -> dict:
+    """Pure equivalent of DocumentTab.set_document_type()'s common-row
+    packing -- single source of truth shared with the web bridge's schema
+    resolver."""
+    visible = COMMON_VISIBLE_BY_TYPE[document_type]
+    items: list[tuple[object, FieldWidth]] = [
+        (name, document_field_meta(name).width) for _label, name, _required, _kind in COMMON_FIELDS if name in visible
+    ]
+    if document_type == DocumentType.TRANSFER:
+        items.append((PAYMENT_METHOD_ITEM, FieldWidth.SHORT))
+    return {"rows": resolve_rows(items)}
+
+
 class DocumentTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -78,14 +116,7 @@ class DocumentTab(QWidget):
         root.setSpacing(14)
         self.common_grid = _grid()
         self.common: dict[str, FieldInput] = {}
-        definitions = [
-            ("Ngày lập tài liệu", "document_date", True, "date"),
-            ("Điện thoại cửa hàng", "shop_phone", False, "number"),
-            ("Nhân viên giao dịch", "staff_name", False, "text"),
-            ("Tên cửa hàng/điểm giao dịch", "shop_name", False, "text"),
-            ("Địa chỉ cửa hàng", "shop_address", False, "text"),
-        ]
-        for label, name, required, input_kind in definitions:
+        for label, name, required, input_kind in COMMON_FIELDS:
             field = FieldInput(label, name, required, input_kind=input_kind)
             self.common[name] = field
         pack_fields(self.common_grid, [(f, document_field_meta(name).width) for name, f in self.common.items()])
@@ -112,42 +143,22 @@ class DocumentTab(QWidget):
     def set_document_type(self, document_type: DocumentType) -> None:
         self.stack.setCurrentWidget(self.forms[document_type])
         self.stack.sync_height()
-        visible_by_type = {
-            DocumentType.TRANSFER: {"document_date"},
-            DocumentType.BEAUTIFUL_NUMBER: {"document_date"},
-            DocumentType.AFTERSALE: {
-                "document_date", "shop_name", "shop_address", "shop_phone", "staff_name",
-            },
-            DocumentType.PREPAID_CONTRACT: {
-                "document_date", "shop_address", "shop_phone", "staff_name",
-            },
-        }
-        required_by_type = {
-            DocumentType.TRANSFER: {"document_date"},
-            DocumentType.BEAUTIFUL_NUMBER: {"document_date"},
-            DocumentType.AFTERSALE: {
-                "document_date", "shop_name", "shop_address", "shop_phone", "staff_name",
-            },
-            DocumentType.PREPAID_CONTRACT: {
-                "document_date", "shop_address", "shop_phone", "staff_name",
-            },
-        }
+        visible = COMMON_VISIBLE_BY_TYPE[document_type]
+        required = COMMON_REQUIRED_BY_TYPE[document_type]
         for name, field in self.common.items():
-            field.setVisible(name in visible_by_type[document_type])
-            field.set_required(name in required_by_type[document_type])
-        visible_common = [
-            (field, document_field_meta(name).width)
-            for name, field in self.common.items()
-            if name in visible_by_type[document_type]
-        ]
+            field.setVisible(name in visible)
+            field.set_required(name in required)
         # Transfer's "payment method" selector packs onto the same row as
         # "Ngày lập tài liệu" instead of sitting alone above its own form.
         payment_group = self.forms[DocumentType.TRANSFER].payment_group
         is_transfer = document_type == DocumentType.TRANSFER
         payment_group.setVisible(is_transfer)
-        if is_transfer:
-            visible_common.append((payment_group, FieldWidth.SHORT))
-        pack_fields(self.common_grid, visible_common)
+
+        def _widgets(rows: list[list[tuple[object, int]]]) -> list[list[tuple[QWidget, int]]]:
+            widget = lambda item: payment_group if item is PAYMENT_METHOD_ITEM else self.common[item]
+            return [[(widget(item), span) for item, span in row] for row in rows]
+
+        place_rows(self.common_grid, _widgets(resolve_common_rows(document_type)["rows"]))
 
     def active_form(self) -> QWidget:
         return self.stack.currentWidget()
