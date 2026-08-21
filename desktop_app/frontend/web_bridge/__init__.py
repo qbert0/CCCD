@@ -49,6 +49,7 @@ from desktop_app.backend.domain.models import (
     SERVICE_TEMPLATE_CUSTOMER_ENTITY_TYPE,
     SERVICE_TEMPLATE_DOCUMENTS,
     SERVICE_TEMPLATE_NAMES,
+    SERVICE_TEMPLATE_PAYMENT_METHOD,
     SERVICE_TEMPLATE_SERVICE_ACTION,
     DocumentType,
     PersonData,
@@ -735,7 +736,9 @@ class WebBridge(QObject):
         state_patch["document_type"] = document_types[0].value
         state_patch["service_action"] = SERVICE_TEMPLATE_SERVICE_ACTION[template]
         state_patch["service_template"] = template.value
-        state_patch["payment_method"] = "Trả trước"
+        # "Hình thức thanh toán" follows the selected mẫu directly: mẫu 1/2
+        # print "Trả trước", mẫu 3/4 print "Cam kết".
+        state_patch["payment_method"] = SERVICE_TEMPLATE_PAYMENT_METHOD[template]
         operator = operator_for_service(self.operator_profiles, template)
         state_patch["staff_name"] = operator.name
 

@@ -30,6 +30,13 @@ EMPTY_BOX = "☐"
 CHECKED_BOX = "☑"
 PDF_CHECKMARK = "✓"
 
+# The data-value placeholder font baked into each template's own runs by
+# scripts/apply_value_font.py -- shared here so a still-blank field
+# resolving to plain dots (see _is_blank_field_text below) can be
+# detected and switched back to an ordinary font instead of printing the
+# blank-line dots themselves in this heavier face.
+VALUE_FONT_NAME = "JetBrainsMono NF ExtraBold"
+
 
 def _date_parts(value: str) -> tuple[str, str, str]:
     match = re.search(r"(\d{1,2})[./-](\d{1,2})[./-](\d{4})", value or "")
@@ -101,6 +108,19 @@ def _document_field_text(name: str, value: object, *, dotted_when_empty: bool = 
     return _empty_field_placeholder(name) if dotted_when_empty else ""
 
 
+def _is_blank_field_text(text: str) -> bool:
+    """True for a still-empty field's placeholder filler, as opposed to a
+    genuinely filled-in value -- so a blank field's own filler can be kept
+    looking like ordinary body text instead of the bold+bigger emphasis
+    scripts/bake_field_highlighting.py bakes into every placeholder run for
+    a real, filled-in value. Two different blank conventions exist in this
+    file: _empty_field_placeholder's length-based "...." (plain periods)
+    and a handful of context values in _docx_context with their own
+    hardcoded "…………"-style ellipsis fallback -- both are just filler
+    characters, so both strip away to nothing here."""
+    return not text.strip(". …")
+
+
 def _paragraph_is_in_table(paragraph: Paragraph) -> bool:
     return any(ancestor.tag == qn("w:tc") for ancestor in paragraph._p.iterancestors())
 
@@ -124,9 +144,13 @@ def _replace_placeholders(paragraph: Paragraph, context: dict[str, str]) -> None
     Presentation (bold/size/dotted markers around a filled value) is NOT
     decided here -- it's baked directly into each template's own placeholder
     runs (see scripts/bake_field_highlighting.py) as real, permanent
-    template content, so this function only ever does the one thing its
-    docstring says: substitute text, keep whatever formatting was already
-    there.
+    template content, so this function mostly just substitutes text and
+    keeps whatever formatting was already there. Two narrow exceptions,
+    both keyed off the actual resolved value rather than the field name:
+    a still-blank field's own dots get de-emphasized back to plain text
+    (see _is_blank_field_text) since the baked bold+bigger styling was
+    meant for a real value, not its own placeholder; a Great Vibes
+    signature run gets title-cased (see SIGNATURE_FONT_NAME below).
     """
     runs = paragraph.runs
     joined = "".join(run.text for run in runs)
@@ -165,6 +189,30 @@ def _replace_placeholders(paragraph: Paragraph, context: dict[str, str]) -> None
             # the exact same value used elsewhere (e.g. a plain-prose
             # mention of the same person) is untouched.
             replacement = replacement.title()
+        if _is_blank_field_text(replacement):
+            if runs[start_run].font.name == VALUE_FONT_NAME:
+                # A still-blank field's own dots printed in the data-value
+                # font (scripts/apply_value_font.py) read like JetBrains
+                # Mono blank-fill dots -- wrong for a genuinely empty
+                # field. Only the run resolving to plain dots gets this;
+                # the same field elsewhere with a real value keeps the
+                # data-value font untouched.
+                runs[start_run].font.name = "Times New Roman"
+                runs[start_run].font.size = Pt(10)
+                r_pr = runs[start_run]._r.get_or_add_rPr()
+                fonts = r_pr.get_or_add_rFonts()
+                for key in ("ascii", "hAnsi", "eastAsia", "cs"):
+                    fonts.set(qn(f"w:{key}"), "Times New Roman")
+            if runs[start_run].font.bold:
+                # A still-blank field's own dots landing in an already-baked
+                # bold+bigger run (see bake_field_highlighting.py) read as if
+                # something WAS filled in -- undo exactly the bump that script
+                # applied (+1pt, unbold) so blank dots look like ordinary
+                # surrounding text instead of emphasized content.
+                size = runs[start_run].font.size
+                runs[start_run].font.bold = False
+                if size is not None:
+                    runs[start_run].font.size = Pt(size.pt - 1)
         if start_run == end_run:
             runs[start_run].text = prefix + replacement + suffix
         else:

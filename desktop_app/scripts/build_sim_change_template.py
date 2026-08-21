@@ -45,6 +45,10 @@ from docx.shared import Mm, Pt
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from desktop_app.backend.documents.font_embed import apply_signature_font, embed_signature_font  # noqa: E402
+from desktop_app.scripts.convert_footnotes_to_real import (  # noqa: E402
+    _footnote_reference_run,
+    _inject_footnotes_part,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -156,52 +160,21 @@ def _keep(paragraph, *, with_next=False, together=True) -> None:
     paragraph.paragraph_format.keep_with_next = with_next
 
 
-def _add_footnote_marker(paragraph, number: int, *, size=7.5) -> None:
-    """Inline superscript numeral matching a note printed by _add_page_footnotes."""
-    run = paragraph.add_run(str(number))
-    _format_run(run, size=size)
-    vert_align = OxmlElement("w:vertAlign")
-    vert_align.set(qn("w:val"), "superscript")
-    run._r.get_or_add_rPr().append(vert_align)
+def _add_footnote_marker(paragraph, number: int) -> None:
+    """Real w:footnoteReference -- Word/LibreOffice places the note text
+    on whatever page this mark itself ends up on, so unlike the old
+    manual-superscript-plus-footer approach (see the module docstring's
+    history), no per-page footer bookkeeping is needed anymore."""
+    paragraph._p.append(_footnote_reference_run(number))
 
 
-def _set_footer(section, numbers: list[int]) -> None:
-    """Build this section's own footer: the given FOOTNOTES entries (if
-    any) printed above the brand banner image, always pinned to the page
-    bottom -- see the module docstring for why these aren't real OOXML
-    footnotes. Each page needing different footnote text must be its own
-    section (see _build_page_two/_build_page_three), since a section's
-    footer is otherwise linked to and identical to the previous one's."""
+def _set_footer(section) -> None:
+    """Every page's footer is just the brand banner image now -- footnote
+    text lives in real footnotes (see _add_footnote_marker), not here."""
     footer = section.footer
     footer.is_linked_to_previous = False
     usable_mm = (section.page_width - section.left_margin - section.right_margin) / 36000
-
-    first = footer.paragraphs[0]
-    first.text = ""
-    if numbers:
-        _format_paragraph(first, after=2)
-        borders = OxmlElement("w:pBdr")
-        top = OxmlElement("w:top")
-        top.set(qn("w:val"), "single")
-        top.set(qn("w:sz"), "4")
-        top.set(qn("w:space"), "1")
-        top.set(qn("w:color"), BLACK)
-        borders.append(top)
-        first._p.get_or_add_pPr().append(borders)
-        for number in numbers:
-            p = footer.add_paragraph()
-            _format_paragraph(p, after=1, line=1.0)
-            number_run = p.add_run(str(number))
-            _format_run(number_run, size=7.5)
-            vert_align = OxmlElement("w:vertAlign")
-            vert_align.set(qn("w:val"), "superscript")
-            number_run._r.get_or_add_rPr().append(vert_align)
-            text_run = p.add_run(f" {FOOTNOTES[number]}")
-            _format_run(text_run, size=7.5, italic=True)
-        image_paragraph = footer.add_paragraph()
-    else:
-        image_paragraph = first
-
+    image_paragraph = footer.paragraphs[0]
     _format_paragraph(image_paragraph, align=WD_ALIGN_PARAGRAPH.CENTER, after=0)
     if FOOTER_IMAGE.is_file():
         image_paragraph.add_run().add_picture(str(FOOTER_IMAGE), width=Mm(usable_mm))
@@ -399,11 +372,11 @@ def _service_table(document: Document, rows: list[tuple[str, str]]) -> None:
 
 def _build_page_two(document: Document) -> None:
     section = document.add_section(WD_SECTION.NEW_PAGE)
-    _set_footer(section, [3])
+    _set_footer(section)
     subscriber_line = _add_line(
         document,
         "Số thuê bao: ",
-        "{{sim_subscriber_number}}        Sê-ri SIM hiện tại: ................................................",
+        "{{sim_subscriber_number}}        Sê-ri SIM hiện tại: {{sim_current_serial}}",
         size=9,
         after=2,
     )
@@ -513,7 +486,7 @@ def _signature_cell(cell, heading: str, *, given_key: str = "", full_key: str = 
 
 def _build_page_three(document: Document) -> None:
     section = document.add_section(WD_SECTION.NEW_PAGE)
-    _set_footer(section, [])
+    _set_footer(section)
     declaration = document.add_paragraph()
     _format_paragraph(declaration, after=5)
     _format_run(
@@ -575,7 +548,7 @@ def build(output_docx: Path = OUTPUT_DOCX) -> Path:
 
     embed_signature_font(document)
     _add_header(section)
-    _set_footer(section, [1, 2])
+    _set_footer(section)
     _build_page_one(document)
     _build_page_two(document)
     _build_page_three(document)
@@ -584,6 +557,12 @@ def build(output_docx: Path = OUTPUT_DOCX) -> Path:
     document.core_properties.subject = "Biểu mẫu Word native dựng lại từ PDF tháng 09/2025"
     document.core_properties.comments = "Không sử dụng ảnh nền hoặc ảnh chụp trang PDF."
     document.save(output_docx)
+    # python-docx has no API for the footnotes part (w:footnoteReference
+    # above is a bare field, resolved against nothing yet) -- same 2-pass
+    # approach as convert_footnotes_to_real.py: save the body first, then
+    # inject word/footnotes.xml + the FootnoteReference style as a raw
+    # zip post-process.
+    _inject_footnotes_part(output_docx, [(number, text) for number, text in sorted(FOOTNOTES.items())])
     return output_docx
 
 

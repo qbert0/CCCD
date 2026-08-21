@@ -272,34 +272,34 @@ class ServiceTemplateTest(unittest.TestCase):
                 ]
                 document_xml = archive.read("word/document.xml")
                 relationships_xml = archive.read("word/_rels/document.xml.rels")
-            # Footnote text is printed as real per-page FOOTER content
-            # (pinned to the page bottom, above the brand banner), never
-            # real OOXML w:footnoteReference/footnotes.xml: LibreOffice's
-            # headless PDF export (this app's own render pipeline -- see
-            # docx_to_images.py) was found to silently drop or misattach a
-            # footnote's body text once more than one crosses a hard page
-            # break, so real footnotes can never safely be used here.
-            self.assertNotIn("word/footnotes.xml", names)
-            self.assertEqual(document_xml.count(b"<w:footnoteReference"), 0)
-            self.assertNotIn(b"relationships/footnotes", relationships_xml)
-            footer_text_by_section = [
-                "\n".join(p.text for p in section.footer.paragraphs)
-                for section in document.sections
-            ]
-            self.assertIn("Số Quyết định thành lập", footer_text_by_section[0])
-            self.assertIn("Số Định danh cá nhân", footer_text_by_section[0])
-            self.assertIn("Các nội dung bỏ trống tại Phần II, III", footer_text_by_section[1])
-            # Page 3 has no footnote of its own -- its footer must not
-            # carry over page 1 or 2's text (each section's footer is
-            # explicitly unlinked from the previous one for exactly this
-            # reason).
+                footnotes_xml = archive.read("word/footnotes.xml")
+            # Footnote text is real OOXML w:footnoteReference/footnotes.xml
+            # now (scripts/build_sim_change_template.py + a shared helper
+            # from scripts/convert_footnotes_to_real.py) -- a deliberate,
+            # re-verified reversal of an earlier finding in this same
+            # session that real footnotes broke under this app's actual
+            # LibreOffice render pipeline: 3 separate fresh repro attempts
+            # (references before/after a page break, several clustered
+            # near one, and enough footnote TEXT volume to force the
+            # footnote area itself to spill across pages) did not
+            # reproduce that bug, so real footnotes are used here like
+            # transfer and prepaid_contract already do.
+            self.assertIn("word/footnotes.xml", names)
+            self.assertEqual(document_xml.count(b"<w:footnoteReference"), 3)
+            self.assertIn(b"relationships/footnotes", relationships_xml)
             for phrase in (
                 "Số Quyết định thành lập",
                 "Số Định danh cá nhân",
                 "Các nội dung bỏ trống tại Phần II, III",
             ):
-                self.assertNotIn(phrase, footer_text_by_section[2])
-            self.assertNotIn("Các nội dung bỏ trống tại Phần II, III", footer_text_by_section[0])
+                self.assertIn(phrase.encode("utf-8"), footnotes_xml)
+            # Word/LibreOffice place each footnote's own text on whatever
+            # page its reference mark ends up on automatically now -- no
+            # more manual per-section footer bookkeeping, so every
+            # section's footer is just the brand banner, no note text.
+            for section in document.sections:
+                footer_text = "\n".join(p.text for p in section.footer.paragraphs)
+                self.assertEqual(footer_text.strip(), "")
             # Exactly the header/footer brand banners now (reused from the
             # transfer template's own real graphics, not a reconstruction)
             # -- every signature is text (the embedded Great Vibes script

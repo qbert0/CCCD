@@ -238,11 +238,11 @@ class DocumentTest(unittest.TestCase):
             self.assertIn("TRẦN THỊ B", text)
             self.assertIn("001204001289", text)
             self.assertIn("0925123456", text)
-            # source_contract_number is a "số: {{ }}" label field, so the
-            # template bakes a trailing dotted marker onto it (space-
-            # separated -- see scripts/bake_field_highlighting.py);
-            # day/month/year fragments never get one.
-            self.assertIn("HĐ-2026-01 ..... ngày 10 tháng 08 năm 2026", text)
+            # The baked dotted markers around placeholder values (see
+            # scripts/bake_field_highlighting.py) were removed per direct
+            # instruction (scripts/remove_baked_dots.py) -- a filled
+            # value now reads directly, no surrounding "....." anymore.
+            self.assertIn("HĐ-2026-01 ngày 10 tháng 08 năm 2026", text)
             self.assertIn("Hôm nay, ngày 11 tháng 08 năm 2026", text)
             self.assertNotIn("{{", text)
             self.assertNotIn("{{pay_method}}", text)
@@ -522,12 +522,12 @@ class DocumentTest(unittest.TestCase):
             self.assertIn("☐ Cập nhật thông tin", text)
             self.assertIn("☐ Thay SIM", text)
             self.assertRegex(text, r"Vietnamobile: \.{20,}")
-            # Filled values are bold+bigger and dotted (space-separated
-            # from the value, both sides mid-sentence or trailing-only
-            # after a "Nhãn:" label) -- baked directly into the template's
-            # own placeholder runs, see scripts/bake_field_highlighting.py.
-            self.assertIn("cho Ông/Bà ..... TRẦN THỊ B .....", text)
-            self.assertIn("số điện thoại 2: 0987000111 .....", text)
+            # Filled values used to carry baked dotted markers (see
+            # scripts/bake_field_highlighting.py) but those were removed
+            # per direct instruction (scripts/remove_baked_dots.py) -- a
+            # filled value now reads directly, no surrounding ".....".
+            self.assertIn("cho Ông/Bà TRẦN THỊ B", text)
+            self.assertIn("số điện thoại 2: 0987000111", text)
             self.assertNotIn("số điện thoại 2: 0900000000", text)
 
             document = Document(output)

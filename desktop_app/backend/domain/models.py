@@ -103,6 +103,17 @@ SERVICE_TEMPLATE_SERVICE_ACTION: dict[ServiceTemplate, str] = {
     ServiceTemplate.SIM_REPLACEMENT: "Thay SIM",
 }
 
+# Transfer's "hình thức thanh toán" line -- mẫu 1/2 are the trả trước
+# offer, mẫu 3/4 are the cam kết offer, so the printed value follows
+# directly from which mẫu is selected.
+SERVICE_TEMPLATE_PAYMENT_METHOD: dict[ServiceTemplate, str] = {
+    ServiceTemplate.PREPAID_TRANSFER_ORG: "Trả trước",
+    ServiceTemplate.PREPAID_TRANSFER_INDIVIDUAL: "Trả trước",
+    ServiceTemplate.COMMITMENT_TRANSFER_INDIVIDUAL: "Cam kết",
+    ServiceTemplate.COMMITMENT_TRANSFER_ORG: "Cam kết",
+    ServiceTemplate.SIM_REPLACEMENT: "Trả trước",
+}
+
 
 @dataclass
 class PersonData:
