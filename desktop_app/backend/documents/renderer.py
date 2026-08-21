@@ -11,6 +11,7 @@ from docx import Document
 from docx.dml.color import RGBColor
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Pt
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
@@ -19,6 +20,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
+from desktop_app.backend.documents.font_embed import SIGNATURE_FONT_NAME
 from desktop_app.backend.domain.models import DocumentType, ReportData
 
 
@@ -103,12 +105,28 @@ def _paragraph_is_in_table(paragraph: Paragraph) -> bool:
     return any(ancestor.tag == qn("w:tc") for ancestor in paragraph._p.iterancestors())
 
 
+def _given_name(full_name: str) -> str:
+    """The last space-separated token of a Vietnamese full name -- the
+    "tên" (given/call name) a person actually signs with, not the whole
+    name. Printed in the Great Vibes script font as the "ký tên" stroke
+    that sits above the full "ghi rõ họ tên" line (see SIGNATURE_GIVEN_NAME_SOURCES)."""
+    parts = str(full_name or "").split()
+    return parts[-1] if parts else ""
+
+
 def _replace_placeholders(paragraph: Paragraph, context: dict[str, str]) -> None:
     """Replace tokens while retaining the formatting of the run where each starts.
 
     Word may split a token into several XML runs after a user edits the template.
     Working against the joined visible text makes that harmless without flattening
     the paragraph or changing the formatting of unrelated runs.
+
+    Presentation (bold/size/dotted markers around a filled value) is NOT
+    decided here -- it's baked directly into each template's own placeholder
+    runs (see scripts/bake_field_highlighting.py) as real, permanent
+    template content, so this function only ever does the one thing its
+    docstring says: substitute text, keep whatever formatting was already
+    there.
     """
     runs = paragraph.runs
     joined = "".join(run.text for run in runs)
@@ -135,6 +153,18 @@ def _replace_placeholders(paragraph: Paragraph, context: dict[str, str]) -> None
             context[name],
             dotted_when_empty=not _paragraph_is_in_table(paragraph),
         )
+        if runs[start_run].font.name == SIGNATURE_FONT_NAME:
+            # Every name value in this codebase arrives already uppercased
+            # (a fine, deliberate choice for the plain Times New Roman
+            # identity blocks it's normally printed in) -- but a cursive
+            # script face like Great Vibes is drawn assuming ordinary
+            # capital+lowercase flow, and its connecting strokes were never
+            # designed for all-caps: run through in full caps, the letters
+            # visibly collide and tangle instead of reading as a signature.
+            # Only the run actually carrying this font gets title-cased;
+            # the exact same value used elsewhere (e.g. a plain-prose
+            # mention of the same person) is untouched.
+            replacement = replacement.title()
         if start_run == end_run:
             runs[start_run].text = prefix + replacement + suffix
         else:
@@ -201,6 +231,24 @@ def _style_docx_checkbox_symbols(paragraph: Paragraph) -> None:
                 _set_symbol_font(new_run)
 
 
+# Every printed signature has 2 lines: "ký tên" (the given name alone, in
+# the Great Vibes script font -- the actual signature stroke) above "ghi
+# rõ họ tên" (the full name, same font). Real signature images used to
+# stand in for the "ký tên" line; now that a script font can do the job,
+# each of these source keys (already a full name, already computed above)
+# gets a "_given_name" companion holding just the last word.
+SIGNATURE_GIVEN_NAME_SOURCES = (
+    ("customer_signature_name", "customer_signature_given_name"),
+    ("customer_representative_signature_name", "customer_representative_signature_given_name"),
+    ("new_owner_signature_name", "new_owner_signature_given_name"),
+    ("aftersale_requester_signature_name", "aftersale_requester_signature_given_name"),
+    ("aftersale_new_owner_signature_name", "aftersale_new_owner_signature_given_name"),
+    ("aftersale_clerk_signature_name", "aftersale_clerk_signature_given_name"),
+    ("prepaid_party_a_signature_name", "prepaid_party_a_signature_given_name"),
+    ("provider_representative", "provider_representative_given_name"),
+)
+
+
 def _docx_context(data: ReportData) -> dict[str, str]:
     customer, new_owner = data.customer, data.new_owner
     prepaid_structured = (
@@ -209,10 +257,9 @@ def _docx_context(data: ReportData) -> dict[str, str]:
     )
     prepaid_representative = data.representative if prepaid_structured else customer
     prepaid_individual = new_owner if prepaid_structured else customer
-    aftersale_organization = data.document_type == DocumentType.AFTERSALE and customer.entity_type == "Tổ chức"
-    signing_customer = new_owner if aftersale_organization else customer
     is_organization = customer.entity_type == "Tổ chức"
     day, month, year = _date_parts(data.document_date)
+    sim_request_day, sim_request_month, sim_request_year = _date_parts(data.document_date)
     def authorization(person) -> str:
         return " - ".join(value for value in (person.authorization_number, person.authorization_date) if value)
 
@@ -241,6 +288,21 @@ def _docx_context(data: ReportData) -> dict[str, str]:
     organization_phones = " - ".join(
         value for value in (data.shop_phone, data.shop_phone_2, data.shop_phone_3) if value
     )
+    # The mẫu (ServiceTemplate) workflow's canonical subscriber list, joined
+    # into one string -- Transfer and Aftersale each only ever had room for
+    # ONE number's worth of prose per blank, so "gộp chung khi có thể" for
+    # them means joining every number into that same blank (same idea as
+    # organization_phones above), not inserting a table (Aftersale has none)
+    # or cloning prose paragraphs. Falls back to the legacy scalar field
+    # when the list is empty, so old saved cases/tests render identically.
+    subscriber_numbers_joined = (
+        ", ".join(
+            str(row.get("subscriber_number", "")).strip()
+            for row in data.subscribers
+            if str(row.get("subscriber_number", "")).strip()
+        )
+        or data.subscriber_number
+    )
 
     effective_day, effective_month, effective_year = _date_parts(data.transfer_effective_date)
     contract_day, contract_month, contract_year = _date_parts(data.source_contract_date)
@@ -259,76 +321,63 @@ def _docx_context(data: ReportData) -> dict[str, str]:
             f"ngày {form_day} tháng {form_month} năm {form_year}"
         )
 
-    return {
+    context = {
         "document_date_line": f"Ngày {day} tháng {month} năm {year}",
         # Aftersale keeps every legal sentence in the DOCX.  These values only
         # fill individual blanks; missing values deliberately become dotted lines.
         "aftersale_day": dotted(aftersale_day, 4),
         "aftersale_month": dotted(aftersale_month, 4),
         "aftersale_year": dotted(aftersale_year, 6),
-        "aftersale_shop_address": dotted(
-            customer.headquarters_address if aftersale_organization else data.shop_address, 42
-        ),
+        "aftersale_shop_address": dotted(data.shop_address, 42),
         "aftersale_shop_phone": dotted(
-            " - ".join(
-                value
-                for value in (
-                    (customer.phone, customer.phone_2)
-                    if aftersale_organization
-                    else (data.shop_phone, data.shop_phone_2)
-                )
-                if value
-            ),
-            24,
+            " - ".join(value for value in (data.shop_phone, data.shop_phone_2) if value), 24
         ),
-        # By explicit request, this identity block prints the COMPANY's own
-        # registration identity (not the actual customer) -- the customer's
-        # own name still appears via customer_signature_name below, near
-        # their signature line. shop_id_number/issue_date/issue_place come
-        # from the company profile's business_registration_* fields (see
-        # WebBridge._default_report_dict()); aftersale_customer_phone joins
-        # the document's 2 contact numbers, same pattern as shop_phone/2/3.
-        "aftersale_customer_name": dotted(
-            (customer.organization_name if aftersale_organization else data.shop_name).upper(), 46
-        ),
+        # This is the form's "Khách hàng / Người yêu cầu" identity, not an
+        # unconditional shop identity. Organization services naturally use
+        # the saved company profile; individual transfers and SIM
+        # replacement use the scanned current owner.
+        "aftersale_customer_name": dotted(customer.display_name().upper(), 46),
         "aftersale_customer_id_number": dotted(
-            customer.business_registration_number if aftersale_organization else data.shop_id_number, 18
+            customer.business_registration_number if is_organization else customer.id_number, 18
         ),
         "aftersale_customer_issue_date": dotted(
-            customer.business_registration_issue_date if aftersale_organization else data.shop_issue_date, 14
+            customer.business_registration_issue_date if is_organization else customer.issue_date, 14
         ),
         "aftersale_customer_issue_place": dotted(
-            customer.business_registration_issue_place if aftersale_organization else data.shop_issue_place, 26
+            customer.business_registration_issue_place if is_organization else customer.issue_place, 26
         ),
         "aftersale_customer_address": dotted(
-            customer.headquarters_address if aftersale_organization else data.shop_address, 48
+            customer.headquarters_address if is_organization else customer.address, 48
         ),
         "aftersale_customer_phone": dotted(
-            " - ".join(
-                value
-                for value in (
-                    (customer.phone, customer.phone_2)
-                    if aftersale_organization
-                    else (data.shop_phone, data.shop_phone_2)
-                )
-                if value
-            ),
-            24,
+            " - ".join(value for value in (customer.phone, customer.phone_2) if value), 24
         ),
         "aftersale_representative_name": dotted(data.provider_representative, 30),
+        # The 3 aftersale signature-table names. "Người yêu cầu" is
+        # deliberately NOT always the customer: when the old owner is an
+        # organization (customer.entity_type == "Tổ chức"), an org can't
+        # physically sign, so its own representative_name signs on its
+        # behalf; when the old owner is an individual, they sign for
+        # themselves. "Chủ thuê bao mới" is always the new owner, in both
+        # cases -- confirmed directly by the shop's own usage.
+        "aftersale_requester_signature_name": (
+            customer.representative_name if is_organization else customer.display_name()
+        ).upper(),
+        "aftersale_new_owner_signature_name": new_owner.display_name().upper(),
+        "aftersale_clerk_signature_name": data.staff_name.upper(),
         "id_attachment_mark": choice_mark(data.has_id_attachment),
         "sim_attachment_mark": choice_mark(data.has_original_sim),
         "other_attachment_mark": choice_mark(bool(data.other_attachment.strip())),
         "other_attachment_value": dotted(data.other_attachment, 48),
         "update_information_mark": choice_mark(data.service_action == "Cập nhật thông tin"),
         "update_subscriber_number": action_value(
-            "Cập nhật thông tin", data.subscriber_number, 30
+            "Cập nhật thông tin", subscriber_numbers_joined, 30
         ),
         "replace_sim_mark": choice_mark(data.service_action == "Thay SIM"),
-        "replace_sim_subscriber_number": action_value("Thay SIM", data.subscriber_number, 30),
+        "replace_sim_subscriber_number": action_value("Thay SIM", subscriber_numbers_joined, 30),
         "transfer_mark": choice_mark(data.service_action == "Chuyển chủ quyền"),
         "transfer_subscriber_number": action_value(
-            "Chuyển chủ quyền", data.subscriber_number, 22
+            "Chuyển chủ quyền", subscriber_numbers_joined, 22
         ),
         "transfer_new_owner_name": action_value(
             "Chuyển chủ quyền", new_owner.display_name().upper(), 28
@@ -344,7 +393,7 @@ def _docx_context(data: ReportData) -> dict[str, str]:
         ),
         "requester_role_mark": choice_mark(data.service_action != "Chuyển chủ quyền"),
         "new_owner_role_mark": choice_mark(data.service_action == "Chuyển chủ quyền"),
-        "common_subscriber_number": dotted(data.subscriber_number, 24),
+        "common_subscriber_number": dotted(subscriber_numbers_joined, 24),
         "backup_phone_1_line": dotted(data.backup_phone_1 or customer.phone, 20),
         "backup_phone_2_line": dotted(data.shop_phone_2, 20),
         "aftersale_staff_name": dotted(data.staff_name, 24),
@@ -371,7 +420,7 @@ def _docx_context(data: ReportData) -> dict[str, str]:
         "shop_name": data.shop_name,
         "shop_address": data.provider_unit_address if prepaid_structured else data.shop_address,
         "shop_phone": data.service_point_phone if prepaid_structured else organization_phones,
-        "customer_signature_name": signing_customer.display_name().upper(),
+        "customer_signature_name": customer.display_name().upper(),
         "customer_representative_signature_name": (
             customer.full_name or customer.representative_name
         ).upper(),
@@ -403,7 +452,7 @@ def _docx_context(data: ReportData) -> dict[str, str]:
         "new_owner_birth_date": new_owner.date_of_birth,
         "new_owner_address": new_owner.address,
         "new_owner_nationality": new_owner.nationality,
-        "subscriber_number": data.subscriber_number,
+        "subscriber_number": subscriber_numbers_joined,
         "transfer_contract_basis": (
             "- " + ("; ".join(transfer_basis) if transfer_basis else "." * 48)
             + " (sau đây gọi chung là “Hợp đồng”)."
@@ -431,7 +480,50 @@ def _docx_context(data: ReportData) -> dict[str, str]:
         "provider_phone": data.provider_phone,
         "provider_email": data.provider_email,
         "registration_time": data.registration_time,
-        "staff_name": data.staff_name,
+        "staff_name": data.staff_name.upper(),
+        "sim_customer_name": customer.display_name().upper(),
+        "sim_customer_birth_date": customer.date_of_birth,
+        "sim_customer_gender": customer.gender,
+        "sim_customer_nationality": customer.nationality,
+        "sim_customer_id_number": customer.id_number,
+        "sim_customer_issue_date": customer.issue_date,
+        "sim_customer_issue_place": customer.issue_place,
+        "sim_customer_address": customer.address,
+        # Unlike the other customer fields on this row, this is the shop's
+        # OWN contact number (data.shop_phone, already auto-defaulted for
+        # every mẫu from the saved company profile) -- not something the
+        # clerk types in per case. Giới tính/Email have no UI input at all
+        # and are left to render as their template's own blank line.
+        "sim_customer_phone": data.shop_phone,
+        "sim_customer_email": customer.email,
+        "sim_subscriber_number": subscriber_numbers_joined,
+        # For SIM replacement the shared subscriber editor's serial is the
+        # NEW card serial. This keeps that editor identical for all services.
+        "sim_new_serial": data.sim_serial,
+        "sim_current_serial": data.sim_current_serial,
+        "sim_reason_lost_mark": choice_mark(data.sim_replacement_reason == "Mất SIM"),
+        "sim_reason_damaged_mark": choice_mark(data.sim_replacement_reason == "Hỏng SIM"),
+        "sim_reason_other_mark": choice_mark(data.sim_replacement_reason == "Lý do khác"),
+        "sim_reason_other_value": data.sim_replacement_other_reason,
+        "sim_request_day": sim_request_day,
+        "sim_request_month": sim_request_month,
+        "sim_request_year": sim_request_year,
+        "sim_request_date_line": (
+            f"ngày {sim_request_day} tháng {sim_request_month} năm {sim_request_year}"
+        ),
+        "sim_document_date_line": (
+            f"ngày {sim_request_day} tháng {sim_request_month} năm {sim_request_year}"
+        ),
+        "frequent_phone_1": data.frequent_phone_1,
+        "frequent_phone_2": data.frequent_phone_2,
+        "frequent_phone_3": data.frequent_phone_3,
+        "frequent_phone_4": data.frequent_phone_4,
+        "frequent_phone_5": data.frequent_phone_5,
+        "recent_topup_value": data.recent_topup_value,
+        "recent_topup_method": data.recent_topup_method,
+        "remaining_validity": data.remaining_validity,
+        "account_balance": data.account_balance,
+        "last_changed_service": data.last_changed_service,
         "prepaid_organization_name": organization(customer.organization_name.upper()),
         "prepaid_headquarters_address": organization(customer.headquarters_address),
         "prepaid_business_number": organization(customer.business_registration_number),
@@ -470,7 +562,27 @@ def _docx_context(data: ReportData) -> dict[str, str]:
             if prepaid_individual.nationality.strip()
             else ""
         ),
+        # Bên A's signature is the person actually taking over the
+        # subscription: the new owner in the structured (org->individual
+        # transfer) mode, or the customer signing for themselves in legacy
+        # mode (their own representative when they're an organization) --
+        # same org-vs-individual split as aftersale_requester_signature_name.
+        # Bên B stays provider_representative (Vietnamobile's own fixed
+        # signer); the two used to share one token, printing identically.
+        "prepaid_party_a_signature_name": (
+            new_owner.display_name() if prepaid_structured
+            else (customer.representative_name if is_organization else customer.display_name())
+        ).upper(),
+        # sim_change_form has no separate "ghi rõ họ tên" line for its
+        # operator/giao dịch viên yet (it used to just insert a signature
+        # image there) -- give it the same 2-line shape as every other
+        # signature in the app.
+        "sim_operator_signature_name": data.staff_name.upper(),
     }
+    for source_key, given_key in SIGNATURE_GIVEN_NAME_SOURCES:
+        context[given_key] = _given_name(context[source_key])
+    context["sim_operator_signature_given_name"] = _given_name(context["sim_operator_signature_name"])
+    return context
 
 
 def _prepaid_rows(data: ReportData) -> list[dict[str, str]]:
@@ -491,6 +603,11 @@ def _prepaid_rows(data: ReportData) -> list[dict[str, str]]:
 
 
 def _set_cell_text_preserving_style(cell, value: str, field_name: str = "") -> None:
+    # Bold/bigger for these cells (when wanted) is baked into the TEMPLATE
+    # row that gets cloned per subscriber entry -- see
+    # scripts/bake_field_highlighting.py -- since this just overwrites
+    # `.text` and leaves each run's existing formatting alone, a cloned
+    # row's own baked-in styling carries through automatically.
     paragraph = cell.paragraphs[0]
     text = (
         _document_field_text(field_name, value, dotted_when_empty=False)
@@ -618,6 +735,44 @@ def _fill_beautiful_number_table(document: Document, data: ReportData) -> None:
         break
 
 
+def _fill_transfer_subscriber_table(document: Document, data: ReportData) -> None:
+    """Clone the party table's "Số thuê bao" row for every subscriber entry.
+
+    Transfer's table is oriented attribute-per-row / party-per-column
+    (Bên A | Bên C), not one-row-per-subscriber like Beautiful Number's --
+    only its LAST row happens to hold a subscriber number, in both party
+    columns (the same number changing hands from Bên A to Bên C). Anchored
+    on that row's own first-cell text ("Số thuê bao"), not the table
+    header, since the header doesn't name columns per-subscriber the way
+    Beautiful Number's/Prepaid's do.
+    """
+    numbers = [
+        str(row.get("subscriber_number", "")).strip()
+        for row in data.subscribers
+        if str(row.get("subscriber_number", "")).strip()
+    ] or [data.subscriber_number]
+    for table in document.tables:
+        subscriber_row_index = next(
+            (i for i, row in enumerate(table.rows) if row.cells[0].text.strip() == "Số thuê bao"),
+            None,
+        )
+        if subscriber_row_index is None:
+            continue
+        template_row = table.rows[subscriber_row_index]
+        for index, number in enumerate(numbers):
+            if index == 0:
+                target_row = template_row
+            else:
+                new_tr = deepcopy(template_row._tr)
+                table._tbl.append(new_tr)
+                target_row = table.rows[-1]
+            label = "Số thuê bao" if len(numbers) == 1 else f"Số thuê bao {index + 1}"
+            _set_cell_text_preserving_style(target_row.cells[0], label)
+            _set_cell_text_preserving_style(target_row.cells[1], number, "subscriber_number")
+            _set_cell_text_preserving_style(target_row.cells[2], number, "subscriber_number")
+        break
+
+
 def _replace_service_point_address(document: Document, data: ReportData) -> None:
     if not data.prepaid_structured_parties:
         return
@@ -633,34 +788,6 @@ def _replace_service_point_address(document: Document, data: ReportData) -> None
         else:
             paragraph.add_run(prefix + address)
         break
-
-
-def _align_aftersale_signature_columns(document: Document) -> None:
-    """Normalize the three handwritten-signature columns in the new form.
-
-    The template already contains real column breaks, but the first two
-    columns inherit left/start alignment while the third is centered.  Set
-    all six visible paragraphs explicitly and keep the final section at
-    three equal columns so Word and LibreOffice produce the same row.
-    """
-    signature_texts = {
-        "NGƯỜI YÊU CẦU",
-        "CHỦ THUÊ BAO MỚI",
-        "GIAO DỊCH VIÊN",
-        "(Ký và ghi rõ họ tên)",
-    }
-    for paragraph in document.paragraphs:
-        if paragraph.text.strip() not in signature_texts:
-            continue
-        properties = paragraph._p.get_or_add_pPr()
-        justification = properties.get_or_add_jc()
-        justification.set(qn("w:val"), "center")
-
-    section_properties = document.sections[-1]._sectPr
-    columns = section_properties.find(qn("w:cols"))
-    if columns is not None:
-        columns.set(qn("w:num"), "3")
-        columns.set(qn("w:equalWidth"), "1")
 
 
 def _generate_docx(
@@ -704,10 +831,10 @@ def _generate_docx(
     if data.document_type == DocumentType.PREPAID_CONTRACT:
         _replace_service_point_address(document, data)
         _fill_prepaid_sim_table(document, data)
-    elif data.document_type == DocumentType.AFTERSALE:
-        _align_aftersale_signature_columns(document)
     elif data.document_type == DocumentType.BEAUTIFUL_NUMBER:
         _fill_beautiful_number_table(document, data)
+    elif data.document_type == DocumentType.TRANSFER:
+        _fill_transfer_subscriber_table(document, data)
 
     if data.document_type == DocumentType.TRANSFER and document.tables:
         table_size = 8.5 if (

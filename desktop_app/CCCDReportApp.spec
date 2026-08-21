@@ -26,7 +26,16 @@ datas = [
         str(project_dir / "desktop_app/backend/documents/prepaid_contract/00_MAU_HOP_DONG_TRA_TRUOC.docx"),
         "desktop_app/backend/documents/prepaid_contract",
     ),
+    (
+        str(project_dir / "desktop_app/backend/documents/sim_change_form/00_MAU_PHIEU_THAY_DOI_DICH_VU_TRA_TRUOC.docx"),
+        "desktop_app/backend/documents/sim_change_form",
+    ),
     (str(project_dir / "desktop_app/data/source/samples"), "desktop_app/data/source/samples"),
+    (str(project_dir / "desktop_app/data/source/signatures"), "desktop_app/data/source/signatures"),
+    (
+        str(project_dir / "desktop_app/data/source/default_settings.ini"),
+        "desktop_app/data/source",
+    ),
     (str(project_dir / "desktop_app/assets"), "desktop_app/assets"),
     (str(project_dir / "runtime_models/paddle"), "runtime_models/paddle"),
     (str(project_dir / "runtime_models/vietocr"), "runtime_models/vietocr"),

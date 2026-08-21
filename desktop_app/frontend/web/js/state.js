@@ -18,46 +18,46 @@ CCCD.state = Vue.reactive({
   customer: {},
   new_owner: {},
   representative: {},
+  provider_company: {},
   // ...remaining ReportData fields (document_date, shop_name, shop_address,
   // shop_phone, staff_name, payment_method, service_action,
   // has_id_attachment, has_original_sim, notes, sim_serial, ...) are added
-  // directly onto this root object by boot()/on_document_type_changed's
-  // state_patch -- never declared individually here, so there's exactly one
+  // directly onto this root object by boot()/service selection's state_patch
+  // -- never declared individually here, so there's exactly one
   // place (Python's DEFAULT_DOCUMENT_VALUES) that knows the full field list.
 
-  layouts: {
-    customer: { primary_rows: [], detail_rows: [], has_detail: false, allow_entity: false },
-    representative: { primary_rows: [], detail_rows: [], has_detail: false, allow_entity: false },
-    new_owner: { primary_rows: [], detail_rows: [], has_detail: false, allow_entity: false },
-    document: { common_rows: [], primary_rows: [], detail_rows: [], has_detail: false, notes_field: null },
-    sims: {},
+  serviceFormLayout: {},
+  subscriberLayout: {},
+
+  // OCR belongs to numbered image slots, not to whichever service happens
+  // to be selected when a worker finishes. Service forms only bind these
+  // two canonical people to their business roles (old/new owner/requester).
+  commonDossier: {
+    revision: 0,
+    person123: { entity_type: "Cá nhân", nationality: "Việt Nam", issue_place: "Cục Cảnh sát QLHC về TTXH" },
+    person456: { entity_type: "Cá nhân", nationality: "Việt Nam", issue_place: "Cục Cảnh sát QLHC về TTXH" },
+    photo123Path: "",
+    photo456Path: "",
+    upload123: { front: null, back: null, status: "Chưa đọc", invalid: false, note: "", busy: false, progress: null },
+    upload456: { front: null, back: null, status: "Chưa đọc", invalid: false, note: "", busy: false, progress: null },
+    rawText123: "",
+    rawText456: "",
   },
 
   ui: {
     ready: false,
-    documentFullTitle: "",
-    tabs: {
-      customerLabel: "Khách hàng",
-      representativeLabel: "Người đại diện",
-      newOwnerLabel: "Chủ thuê bao mới",
-      documentLabel: "Thông tin tài liệu",
-      simsLabel: "Danh sách SIM",
-      representativeTabVisible: false,
-      newOwnerTabVisible: false,
-      simsTabVisible: false,
-      newOwnerUploadVisible: false,
-    },
-    activeTab: "customer",
-    detailOpen: { customer: false, representative: false, new_owner: false, document: false, profile: false },
+    activeTab: "current_owner",
+    serviceFormOpen: true,
+    sourceProcessing: false,
     ocrPanelOpen: false,
+    sourceFolder: "",
+    sourceFiles: {},
+    sourcePaths: {},
     ocrRawText: { customer: "", new_owner: "" },
     errors: {}, // dotted ReportData path -> message
     upload: {
       customer: { front: null, back: null, status: "Chưa có ảnh", invalid: false, note: "", busy: false, progress: null },
       new_owner: { front: null, back: null, status: "Chưa có ảnh", invalid: false, note: "", busy: false, progress: null },
-      // Company Profile dialog's own "Người đại diện" intake card -- a
-      // session record, not case data, so it isn't reset by "Hồ sơ mới".
-      representative: { front: null, back: null, status: "Chưa có ảnh", invalid: false, note: "", busy: false, progress: null },
     },
     busy: false,
     statusMessage: "Sẵn sàng",
@@ -99,12 +99,43 @@ CCCD.mergeNonEmpty = function (target, fields) {
   }
 };
 
-// Shallow-merge a {"customer": {...}, "new_owner": {...}, <root fields>...}
-// state_patch (as returned by on_document_type_changed) onto CCCD.state.
+CCCD.blankCommonUpload = function () {
+  return {
+    front: null, back: null, status: "Chưa đọc", invalid: false,
+    note: "", busy: false, progress: null,
+  };
+};
+
+CCCD.resetCommonDossier = function (revision) {
+  CCCD.state.commonDossier = {
+    revision: Number(revision || 0),
+    person123: { entity_type: "Cá nhân", nationality: "Việt Nam", issue_place: "Cục Cảnh sát QLHC về TTXH" },
+    person456: { entity_type: "Cá nhân", nationality: "Việt Nam", issue_place: "Cục Cảnh sát QLHC về TTXH" },
+    photo123Path: "",
+    photo456Path: "",
+    upload123: CCCD.blankCommonUpload(),
+    upload456: CCCD.blankCommonUpload(),
+    rawText123: "",
+    rawText456: "",
+  };
+};
+
+CCCD.commonDossierSnapshot = function () {
+  const common = CCCD.state.commonDossier || {};
+  return {
+    revision: Number(common.revision || 0),
+    person123: JSON.parse(JSON.stringify(common.person123 || {})),
+    person456: JSON.parse(JSON.stringify(common.person456 || {})),
+    photo123Path: String(common.photo123Path || ""),
+    photo456Path: String(common.photo456Path || ""),
+  };
+};
+
+// Merge a service state patch onto the single dossier state.
 CCCD.applyStatePatch = function (patch) {
   if (!patch) return;
   for (const [key, value] of Object.entries(patch)) {
-    if ((key === "customer" || key === "new_owner" || key === "representative") && value && typeof value === "object") {
+    if (["customer", "new_owner", "representative", "provider_company"].includes(key) && value && typeof value === "object") {
       Object.assign(CCCD.state[key], value);
     } else {
       CCCD.state[key] = value;
@@ -113,6 +144,10 @@ CCCD.applyStatePatch = function (patch) {
 };
 
 CCCD.reportDataSnapshot = function () {
-  const { layouts, ui, ...reportData } = CCCD.state;
+  const {
+    ui, serviceFormLayout, subscriberLayout, commonDossier,
+    serviceTemplateOptions, serviceDocumentCount,
+    ...reportData
+  } = CCCD.state;
   return reportData;
 };

@@ -3,6 +3,7 @@ import unittest
 from desktop_app.backend.domain.models import DocumentType, PersonData, ReportData
 from desktop_app.backend.documents import DocumentRegistry
 from desktop_app.backend.ocr.parser import parse_ocr_text, parse_qr
+from desktop_app.backend.validation.rules import valid_date
 
 
 class ModelTest(unittest.TestCase):
@@ -91,6 +92,12 @@ class ModelTest(unittest.TestCase):
         self.assertIn("customer.date_of_birth", paths)
         self.assertIn("customer.phone", paths)
         self.assertIn("subscriber_number", paths)
+
+    def test_date_validation_rejects_extra_digits_and_impossible_dates(self):
+        for value in ("12/12/199611", "111/12/1996", "31/02/2026", "29/02/2025"):
+            with self.subTest(value=value):
+                self.assertFalse(valid_date(value))
+        self.assertTrue(valid_date("29/02/2024"))
 
     def test_schema_rejects_relevant_date_order_and_ignores_hidden_expiry(self):
         data = ReportData(

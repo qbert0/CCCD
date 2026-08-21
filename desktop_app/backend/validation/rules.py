@@ -152,6 +152,36 @@ def valid_phone(value: str) -> bool:
     return bool(re.fullmatch(r"[+\d().\s-]+", value) and 9 <= len(digits) <= 12)
 
 
+def duplicate_subscriber_errors(
+    rows: list[dict[str, str]],
+    path_prefix: str,
+) -> list[FieldError]:
+    """Mark every occurrence of a duplicated subscriber number.
+
+    Comparison uses digits only so harmless display punctuation cannot hide
+    a duplicate (for example ``0925 123 456`` and ``0925123456``).
+    Empty rows remain available for data entry and are never duplicates.
+    """
+    groups: dict[str, list[int]] = {}
+    for index, row in enumerate(rows):
+        value = str(row.get("subscriber_number", "") or "").strip()
+        canonical = re.sub(r"\D", "", value)
+        if 9 <= len(canonical) <= 12:
+            groups.setdefault(canonical, []).append(index)
+
+    errors: list[FieldError] = []
+    for indexes in groups.values():
+        if len(indexes) < 2:
+            continue
+        row_numbers = ", ".join(str(index + 1) for index in indexes)
+        message = f"Số thuê bao bị trùng ở các dòng {row_numbers}"
+        errors.extend(
+            FieldError(f"{path_prefix}.{index}.subscriber_number", message)
+            for index in indexes
+        )
+    return errors
+
+
 def common_errors(
     data: ReportData,
     date_paths: tuple[str, ...] = (),
@@ -165,7 +195,27 @@ def common_errors(
     for path in ("document_date", *date_paths):
         value = str(value_at(data, path) or "").strip()
         if value and not valid_date(value):
-            errors.append(FieldError(path, "Ngày phải đúng định dạng DD/MM/YYYY"))
+            errors.append(FieldError(path, "Ngày không hợp lệ. Hãy nhập đúng DD/MM/YYYY."))
+    return errors
+
+
+def subscriber_list_errors(data: ReportData) -> list[FieldError]:
+    """Shared by Transfer/Aftersale: at least one number must be available
+    (scalar `subscriber_number` OR a non-empty row in `data.subscribers` --
+    see ReportData.has_subscriber_number()), and every row that's actually
+    filled in must be phone-format-valid. Mirrors the per-row validation
+    BeautifulNumberSchema already does over its own `beautiful_subscribers`
+    list."""
+    errors: list[FieldError] = []
+    if not data.has_subscriber_number():
+        errors.append(FieldError("subscriber_number", "Số thuê bao là thông tin bắt buộc"))
+    for index, row in enumerate(data.subscribers):
+        value = str(row.get("subscriber_number", "") or "").strip()
+        if value and not valid_phone(value):
+            errors.append(
+                FieldError(f"subscribers.{index}.subscriber_number", "Số điện thoại phải gồm từ 9 đến 12 chữ số")
+            )
+    errors += duplicate_subscriber_errors(data.subscribers, "subscribers")
     return errors
 
 

@@ -12,6 +12,7 @@ class DocumentType(str, Enum):
     AFTERSALE = "aftersale"
     BEAUTIFUL_NUMBER = "beautiful_number"
     PREPAID_CONTRACT = "prepaid_contract"
+    SIM_CHANGE_FORM = "sim_change_form"
 
 
 DOCUMENT_NAMES = {
@@ -25,6 +26,9 @@ DOCUMENT_NAMES = {
         "Hợp đồng cung cấp và sử dụng dịch vụ thông tin di động mặt đất "
         "Vietnamobile – Hình thức thanh toán trả trước"
     ),
+    DocumentType.SIM_CHANGE_FORM: (
+        "Phiếu cung cấp và thay đổi dịch vụ thông tin di động mặt đất (trả trước)"
+    ),
 }
 
 DOCUMENT_SHORT_NAMES = {
@@ -32,6 +36,71 @@ DOCUMENT_SHORT_NAMES = {
     DocumentType.AFTERSALE: "Cam kết giao dịch sau bán hàng",
     DocumentType.BEAUTIFUL_NUMBER: "Phụ lục cam kết số đẹp",
     DocumentType.PREPAID_CONTRACT: "Hợp đồng thuê bao trả trước",
+    DocumentType.SIM_CHANGE_FORM: "Phiếu cung cấp & thay đổi dịch vụ trả trước",
+}
+
+
+class ServiceTemplate(str, Enum):
+    """The 5 real-world service "mẫu" a shop actually sells -- each one is a
+    fixed set of document types that must be generated together,
+    plus a couple of shared defaults (customer entity type, service action)
+    those documents need. Business mapping confirmed directly by the user,
+    not derived/guessed -- see SERVICE_TEMPLATE_DOCUMENTS below."""
+
+    PREPAID_TRANSFER_ORG = "prepaid_transfer_org"  # Mẫu 1
+    PREPAID_TRANSFER_INDIVIDUAL = "prepaid_transfer_individual"  # Mẫu 2
+    COMMITMENT_TRANSFER_INDIVIDUAL = "commitment_transfer_individual"  # Mẫu 3
+    COMMITMENT_TRANSFER_ORG = "commitment_transfer_org"  # Mẫu 4
+    SIM_REPLACEMENT = "sim_replacement"  # Mẫu 5
+
+
+SERVICE_TEMPLATE_NAMES = {
+    ServiceTemplate.PREPAID_TRANSFER_ORG: "Chuyển quyền trả trước (Tổ chức → Cá nhân)",
+    ServiceTemplate.PREPAID_TRANSFER_INDIVIDUAL: "Chuyển quyền trả trước (Cá nhân → Cá nhân)",
+    ServiceTemplate.COMMITMENT_TRANSFER_INDIVIDUAL: "Chuyển quyền cam kết (Cá nhân → Cá nhân)",
+    ServiceTemplate.COMMITMENT_TRANSFER_ORG: "Chuyển quyền cam kết (Tổ chức → Cá nhân)",
+    ServiceTemplate.SIM_REPLACEMENT: "Thay SIM",
+}
+
+# Which DocumentTypes get generated for each mẫu, in generation order.
+SERVICE_TEMPLATE_DOCUMENTS: dict[ServiceTemplate, list[DocumentType]] = {
+    ServiceTemplate.PREPAID_TRANSFER_ORG: [
+        DocumentType.TRANSFER, DocumentType.AFTERSALE,
+        DocumentType.BEAUTIFUL_NUMBER, DocumentType.PREPAID_CONTRACT,
+    ],
+    ServiceTemplate.PREPAID_TRANSFER_INDIVIDUAL: [
+        DocumentType.TRANSFER, DocumentType.AFTERSALE,
+        DocumentType.BEAUTIFUL_NUMBER, DocumentType.PREPAID_CONTRACT,
+    ],
+    ServiceTemplate.COMMITMENT_TRANSFER_INDIVIDUAL: [
+        DocumentType.TRANSFER, DocumentType.AFTERSALE,
+        DocumentType.BEAUTIFUL_NUMBER, DocumentType.PREPAID_CONTRACT,
+    ],
+    ServiceTemplate.COMMITMENT_TRANSFER_ORG: [
+        DocumentType.TRANSFER, DocumentType.AFTERSALE,
+        DocumentType.BEAUTIFUL_NUMBER, DocumentType.PREPAID_CONTRACT,
+    ],
+    ServiceTemplate.SIM_REPLACEMENT: [DocumentType.AFTERSALE, DocumentType.SIM_CHANGE_FORM],
+}
+
+# "Tổ chức" mẫu (1 & 4) means the CUSTOMER (Bên A / current owner) is an
+# organization; every mẫu's new_owner (Bên C / the person receiving the
+# number) is always an individual -- none of the 5 mẫu transfer to a company.
+SERVICE_TEMPLATE_CUSTOMER_ENTITY_TYPE: dict[ServiceTemplate, str] = {
+    ServiceTemplate.PREPAID_TRANSFER_ORG: "Tổ chức",
+    ServiceTemplate.PREPAID_TRANSFER_INDIVIDUAL: "Cá nhân",
+    ServiceTemplate.COMMITMENT_TRANSFER_INDIVIDUAL: "Cá nhân",
+    ServiceTemplate.COMMITMENT_TRANSFER_ORG: "Tổ chức",
+    ServiceTemplate.SIM_REPLACEMENT: "Cá nhân",
+}
+
+# Aftersale's own service_action, required by every mẫu that includes it.
+SERVICE_TEMPLATE_SERVICE_ACTION: dict[ServiceTemplate, str] = {
+    ServiceTemplate.PREPAID_TRANSFER_ORG: "Chuyển chủ quyền",
+    ServiceTemplate.PREPAID_TRANSFER_INDIVIDUAL: "Chuyển chủ quyền",
+    ServiceTemplate.COMMITMENT_TRANSFER_INDIVIDUAL: "Chuyển chủ quyền",
+    ServiceTemplate.COMMITMENT_TRANSFER_ORG: "Chuyển chủ quyền",
+    ServiceTemplate.SIM_REPLACEMENT: "Thay SIM",
 }
 
 
@@ -96,6 +165,11 @@ class ReportData:
     document_type: DocumentType
     customer: PersonData = field(default_factory=PersonData)
     new_owner: PersonData = field(default_factory=PersonData)
+    # The prepaid contract's company party is independent from the old
+    # subscriber owner used by the transfer record. Without this separation,
+    # service 2 (individual -> individual) had to overwrite the old owner
+    # with the saved company merely to satisfy the prepaid contract.
+    provider_company: PersonData = field(default_factory=lambda: PersonData(entity_type="Tổ chức"))
     # Prepaid Contract has three distinct parties on screen.  Keep the
     # representative separate from both the saved company (customer) and
     # the CCCD-scanned end customer (new_owner), so editing one tab can
@@ -114,15 +188,32 @@ class ReportData:
     shop_phone: str = ""
     shop_phone_2: str = ""
     shop_phone_3: str = ""
-    # Aftersale's "Thông tin tài liệu" tab identity block -- by explicit
-    # request, sourced entirely from the company profile (business
-    # registration number/issue date/place), not the actual customer.
-    # Auto-filled from company_profile at boot/new-case time, same pattern
-    # as shop_name/shop_address, and stays editable per-document.
+    # Legacy shop identity defaults retained for compatibility with saved
+    # drafts.  Aftersale rendering now uses the actual requester (`customer`)
+    # so an individual/SIM-replacement case can never print the shop's legal
+    # identity in place of the customer.
     shop_id_number: str = ""
     shop_issue_date: str = ""
     shop_issue_place: str = ""
     staff_name: str = ""
+    # Additional fields printed on the prepaid SIM-change request. The NEW
+    # SIM's serial remains in the shared subscriber table so all five
+    # services keep the same fast subscriber editor; the OLD/current card's
+    # serial has no such shared home (only this document ever needs it), so
+    # it's its own field here.
+    sim_current_serial: str = ""
+    sim_replacement_reason: str = "Hỏng SIM"
+    sim_replacement_other_reason: str = ""
+    frequent_phone_1: str = ""
+    frequent_phone_2: str = ""
+    frequent_phone_3: str = ""
+    frequent_phone_4: str = ""
+    frequent_phone_5: str = ""
+    recent_topup_value: str = ""
+    recent_topup_method: str = ""
+    remaining_validity: str = ""
+    account_balance: str = ""
+    last_changed_service: str = ""
     backup_phone_1: str = ""
     backup_phone_2: str = ""
     commitment_months: str = "12"
@@ -144,6 +235,39 @@ class ReportData:
     # paginated onto continuation sheets by the PDF renderer.  The legacy
     # fixed row-1/row-2 fields above remain for old saved data/QWidget code.
     beautiful_subscribers: list[dict[str, str]] = field(default_factory=list)
+    # Canonical, document-type-agnostic subscriber list for the "mẫu"
+    # (ServiceTemplate) workflow -- one entry per number the customer is
+    # transacting on, freely added by the user (default activation_date =
+    # today, everything else blank until typed). Generation-time code maps
+    # this into whichever shape each individual document actually needs
+    # (Transfer clones a table row per entry; Aftersale joins the numbers
+    # into its one existing blank; Beautiful Number/Prepaid Contract get it
+    # copied into their own existing beautiful_subscribers/prepaid_subscribers
+    # lists) -- see documents/service_templates.py. A superset row shape
+    # (sim_serial for Prepaid, commitment_months/commitment_note for
+    # Beautiful Number) so one list covers every document's columns; each
+    # renderer just ignores the keys it doesn't use. commitment_months
+    # falls back to the top-level `commitment_months` field when a row
+    # leaves it blank (see service_templates.py::_variant_for()).
+    subscribers: list[dict[str, str]] = field(
+        default_factory=lambda: [
+            {
+                "subscriber_number": "", "monthly_fee": "", "commitment_months": "",
+                "activation_date": date.today().strftime("%d/%m/%Y"),
+                "sim_serial": "", "commitment_note": "",
+            }
+        ]
+    )
+    # Which mẫu (if any) this case was generated from -- purely a UI/
+    # orchestration hint, no document template reads it directly.
+    service_template: str = ""
+    # Filed for the shop's own reference alongside the case -- no generated
+    # document has a photo slot, so this never reaches a placeholder/render
+    # path. Copied into the numbered output folder (image #3/#6) instead --
+    # Numbered folder portraits (3.jpg/6.jpg) are referenced directly and
+    # never sent through OCR; see documents/numbered_folder.py.
+    customer_photo_path: str = ""
+    new_owner_photo_path: str = ""
     service_action: str = "Cập nhật thông tin"
     payment_method: str = "Trả trước"
     source_contract_number: str = ""
@@ -175,7 +299,10 @@ class ReportData:
     provider_unit_address: str = ""
     service_point_address: str = ""
     service_point_phone: str = ""
-    registration_time: str = ""
+    # Like transfer_time/transfer_effective_date above -- this really is
+    # "now" by default (when the shop is actually doing the registration),
+    # not paperwork the shop has to go look up. Free text, printed verbatim.
+    registration_time: str = field(default_factory=lambda: datetime.now().strftime("%H:%M ngày %d/%m/%Y"))
     # The printed prepaid template has five real data rows.  A list keeps
     # the UI extensible while the renderer caps output at that capacity.
     prepaid_subscribers: list[dict[str, str]] = field(default_factory=list)
@@ -185,6 +312,17 @@ class ReportData:
     prepaid_structured_parties: bool = False
     commitment_note: str = ""
     notes: str = ""
+
+    def has_subscriber_number(self) -> bool:
+        """True if a number is available from EITHER source -- the legacy
+        scan-column scalar field, or at least one non-empty row in the mẫu
+        workflow's `subscribers` list. Transfer/Aftersale's own
+        required_paths() use this instead of requiring the scalar path
+        outright, since renderer.py's _docx_context() already falls back to
+        the scalar whenever `subscribers` is empty/blank."""
+        return bool(self.subscriber_number) or any(
+            str(row.get("subscriber_number", "")).strip() for row in self.subscribers
+        )
 
     def validation_errors(self) -> list[str]:
         from desktop_app.backend.documents import DocumentRegistry

@@ -1,6 +1,67 @@
 window.CCCD = window.CCCD || {};
 CCCD.components = {};
 
+// Civil dates stay as dd/mm/yyyy strings throughout the UI.  Keeping this
+// parser independent from JavaScript's Date string parser avoids both its
+// locale ambiguity and the silent rollover of values such as 31/02/2026.
+const DATE_INPUT_ERROR = "Ngày không hợp lệ. Hãy nhập đúng DD/MM/YYYY.";
+
+function daysInMonth(year, month) {
+  if (month === 2) {
+    const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    return leap ? 29 : 28;
+  }
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
+function parseDMY(value) {
+  const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(value || "").trim());
+  if (!match) return null;
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = Number(match[3]);
+  if (year < 1 || month < 1 || month > 12) return null;
+  if (day < 1 || day > daysInMonth(year, month)) return null;
+  return { y: year, m: month, d: day };
+}
+
+function fmtDMY({ y, m, d }) {
+  return `${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}/${String(y).padStart(4, "0")}`;
+}
+
+function dateInputError(value) {
+  return String(value || "").trim() && !parseDMY(value) ? DATE_INPUT_ERROR : "";
+}
+
+function looksLikeCompletedDate(value) {
+  const text = String(value || "").trim();
+  return text.length >= 10 || /^\d{1,3}\/\d{1,3}\/\d{4,}$/.test(text);
+}
+
+// Exposed for the subscriber table and lightweight regression tests.  All
+// date fields, including rows added dynamically, use exactly the same rules.
+CCCD.dateInput = {
+  parse: parseDMY,
+  format: fmtDMY,
+  error: dateInputError,
+  looksComplete: looksLikeCompletedDate,
+};
+
+const DUPLICATE_SUBSCRIBER_ERROR_PREFIX = "Số thuê bao bị trùng ở các dòng";
+
+function duplicateSubscriberGroups(rows) {
+  const grouped = new Map();
+  (rows || []).forEach((row, index) => {
+    const canonical = String(row?.subscriber_number || "").replace(/\D/g, "");
+    if (canonical.length < 9 || canonical.length > 12) return;
+    if (!grouped.has(canonical)) grouped.set(canonical, []);
+    grouped.get(canonical).push(index);
+  });
+  return [...grouped.values()].filter((indexes) => indexes.length > 1);
+}
+
+CCCD.subscriberInput = { duplicateGroups: duplicateSubscriberGroups };
+
 // ---------------------------------------------------------------------------
 // CompositionSafeControl -- keep the browser's live editing buffer outside
 // Vue's controlled `value` patching. QtWebEngine/Fcitx does not consistently
@@ -18,7 +79,7 @@ CCCD.components.CompositionSafeControl = {
     numeric: Boolean,
     maxLength: { type: [String, Number], default: 0 },
   },
-  emits: ["update:modelValue"],
+  emits: ["update:modelValue", "blur"],
   data() {
     return { editing: false, composing: false };
   },
@@ -56,6 +117,7 @@ CCCD.components.CompositionSafeControl = {
       this.composing = false;
       this.editing = false;
       this.publish(event);
+      this.$emit("blur", event.target.value);
     },
   },
   template: `
@@ -94,7 +156,13 @@ CCCD.components.FieldInput = {
   methods: {
     setValue(v) {
       CCCD.setByPath(this.root, this.field.path, v);
-      if (v && this.error) delete CCCD.state.ui.errors[this.field.path];
+      if (this.field.kind === "date") {
+        const message = CCCD.dateInput.looksComplete(v) ? CCCD.dateInput.error(v) : "";
+        if (message) CCCD.state.ui.errors[this.field.path] = message;
+        else if (this.error) delete CCCD.state.ui.errors[this.field.path];
+      } else if (v && this.error) {
+        delete CCCD.state.ui.errors[this.field.path];
+      }
       // The entity_type select (Cá nhân/Tổ chức) doesn't just change a
       // value -- it changes which OTHER fields are even visible/required,
       // which only Python (resolve_person_form) knows how to recompute. A
@@ -102,6 +170,22 @@ CCCD.components.FieldInput = {
       if (this.field.name === "entity_type") {
         this.$emit("entity-type-changed", { path: this.field.path, value: v });
       }
+    },
+    validateDate(rawValue) {
+      const value = String(rawValue ?? this.value).trim();
+      if (!value) {
+        if (CCCD.state.ui.errors[this.field.path] === DATE_INPUT_ERROR) {
+          delete CCCD.state.ui.errors[this.field.path];
+        }
+        return;
+      }
+      const message = CCCD.dateInput.error(value);
+      if (message) {
+        CCCD.state.ui.errors[this.field.path] = message;
+        return;
+      }
+      if (value) CCCD.setByPath(this.root, this.field.path, CCCD.dateInput.format(CCCD.dateInput.parse(value)));
+      delete CCCD.state.ui.errors[this.field.path];
     },
   },
   template: `
@@ -119,9 +203,13 @@ CCCD.components.FieldInput = {
       <composition-safe-control v-else-if="field.kind === 'number'" numeric
         class="field__control" :id="field.path" :placeholder="placeholder" :data-invalid="!!error"
         :max-length="field.max_length || 0" :model-value="value" @update:model-value="setValue" />
-      <input v-else-if="field.kind === 'date'" class="field__control" type="text" :id="field.path"
-        :placeholder="placeholder" :value="value" :data-invalid="!!error" readonly
-        @click="$emit('open-calendar', { field, root, $event })">
+      <div v-else-if="field.kind === 'date'" class="field__date">
+        <composition-safe-control class="field__control" :id="field.path"
+          :placeholder="placeholder" :data-invalid="!!error"
+          :model-value="value" @update:model-value="setValue" @blur="validateDate" />
+        <button type="button" class="field__date-trigger" aria-label="Chọn từ lịch"
+          @click="$emit('open-calendar', { field, root, $event })">📅</button>
+      </div>
       <composition-safe-control v-else class="field__control" :id="field.path"
         :placeholder="placeholder" :data-invalid="!!error"
         :model-value="value" @update:model-value="setValue" />
@@ -152,117 +240,6 @@ CCCD.components.CheckboxGroup = {
 };
 
 // ---------------------------------------------------------------------------
-// SubscriberTable -- unlimited Beautiful Number entries. The renderer puts
-// row 1 in the original form and paginates every remaining row onto clean
-// continuation sheets, so the UI no longer has an artificial two-row cap.
-// ---------------------------------------------------------------------------
-CCCD.components.SubscriberTable = {
-  props: { field: Object, root: Object },
-  computed: {
-    rows() {
-      return this.root[this.field.list_path] || [];
-    },
-  },
-  mounted() {
-    if (!Array.isArray(this.root[this.field.list_path]) || !this.root[this.field.list_path].length) {
-      this.root[this.field.list_path] = [this.blankRow()];
-    }
-  },
-  methods: {
-    blankRow() {
-      return { subscriber_number: "", commitment_months: "12", monthly_fee: "", commitment_note: "" };
-    },
-    path(column, index) {
-      return `${this.field.list_path}.${index}.${column.name}`;
-    },
-    value(column, index) {
-      const value = String(this.rows[index]?.[column.name] ?? "");
-      return column.name === "commitment_months"
-        ? value.replace(/\s*tháng\s*$/i, "")
-        : value;
-    },
-    error(column, index) {
-      return CCCD.state.ui.errors[this.path(column, index)] || "";
-    },
-    setValue(column, index, value) {
-      this.rows[index][column.name] = value;
-      delete CCCD.state.ui.errors[this.path(column, index)];
-    },
-    isMonth(column) {
-      return column.name === "commitment_months";
-    },
-    isMonthlyFee(column) {
-      return column.name === "monthly_fee";
-    },
-    suffix(column) {
-      if (this.isMonth(column)) return "tháng";
-      if (this.isMonthlyFee(column)) return ".000đ";
-      return "";
-    },
-    placeholder(column) {
-      if (this.isMonth(column)) return "Số tháng";
-      if (column.name === "subscriber_number") return "Nhập số thuê bao";
-      if (this.isMonthlyFee(column)) return "Nhập số nghìn đồng";
-      return "Nhập ghi chú";
-    },
-    addRow() {
-      this.rows.push(this.blankRow());
-    },
-    removeRow(index) {
-      if (this.rows.length === 1) this.rows.splice(0, 1, this.blankRow());
-      else this.rows.splice(index, 1);
-    },
-  },
-  template: `
-    <div class="subscriber-table">
-      <div class="subscriber-table__header">
-        <div>
-          <div class="subscriber-table__title">{{ field.label }}</div>
-          <div class="subscriber-table__hint">Có thể thêm nhiều số; tài liệu sẽ tự tạo trang tiếp theo</div>
-        </div>
-        <button type="button" class="btn btn--ghost subscriber-table__add" @click="addRow">＋ Thêm số</button>
-      </div>
-      <div class="subscriber-table__scroll">
-        <table class="subscriber-table__grid">
-          <colgroup>
-            <col class="subscriber-table__col-index">
-            <col v-for="c in field.columns" :key="c.label">
-            <col class="subscriber-table__col-actions">
-          </colgroup>
-          <thead>
-            <tr>
-              <th class="subscriber-table__index">STT</th>
-              <th v-for="c in field.columns" :key="c.label">{{ c.label }}</th>
-              <th><span class="sr-only">Thao tác</span></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(row, rowIndex) in rows" :key="rowIndex">
-              <td class="subscriber-table__index"><span>{{ rowIndex + 1 }}</span></td>
-              <td v-for="column in field.columns" :key="column.name">
-                <div class="subscriber-table__input-wrap" :data-invalid="!!error(column, rowIndex)">
-                  <composition-safe-control class="subscriber-table__input"
-                    :numeric="column.kind === 'number'"
-                    :inputmode="column.kind === 'number' ? 'numeric' : 'text'"
-                    :placeholder="placeholder(column)" :model-value="value(column, rowIndex)"
-                    @update:model-value="setValue(column, rowIndex, $event)" />
-                  <span v-if="suffix(column)" class="subscriber-table__suffix">{{ suffix(column) }}</span>
-                </div>
-                <div v-if="error(column, rowIndex)" class="field__error">{{ error(column, rowIndex) }}</div>
-              </td>
-              <td class="subscriber-table__actions">
-                <button type="button" class="subscriber-table__remove"
-                  :aria-label="'Xóa số thuê bao dòng ' + (rowIndex + 1)" @click="removeRow(rowIndex)">Xóa</button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  `,
-};
-
-// ---------------------------------------------------------------------------
 // FormGrid -- renders resolved rows (span + field descriptor) from
 // web_bridge/schema.py. The wrapping/packing decision was already made in
 // Python (resolve_rows()); this is just a CSS grid with span classes.
@@ -276,7 +253,6 @@ CCCD.components.FormGrid = {
         <div v-for="(cell, ci) in row" :key="cell.field.path"
           :class="['form-grid__cell--span-' + cell.span, ci === 0 ? 'form-grid__cell--row-start' : '']">
           <checkbox-group v-if="cell.field.kind === 'checkbox_group'" :field="cell.field" :root="root" />
-          <subscriber-table v-else-if="cell.field.kind === 'subscriber_table'" :field="cell.field" :root="root" />
           <field-input v-else :field="cell.field" :root="root" @open-calendar="$emit('open-calendar', $event)"
             @entity-type-changed="$emit('entity-type-changed', $event)" />
         </div>
@@ -295,10 +271,7 @@ CCCD.components.SectionedForm = {
   template: `
     <div class="sectioned-form">
       <section v-for="section in sections" :key="section.title" class="sectioned-form__section">
-        <div class="sectioned-form__heading">
-          <div class="sectioned-form__title">{{ section.title }}</div>
-          <div v-if="section.description" class="sectioned-form__description">{{ section.description }}</div>
-        </div>
+        <div class="sectioned-form__title">{{ section.title }}</div>
         <form-grid :rows="section.rows" :root="root" @open-calendar="$emit('open-calendar', $event)" />
       </section>
     </div>
@@ -306,83 +279,145 @@ CCCD.components.SectionedForm = {
 };
 
 // ---------------------------------------------------------------------------
-// PrepaidSimTable -- the original contract provides five rows. Rows remain
-// ordinary ReportData values, support add/remove, validation and date picker.
+// SubscriberList -- the mẫu (service-template) workflow's own canonical,
+// subscriber list (root.subscribers). Python supplies the exact columns and
+// row limit for the selected service; this component never knows document
+// types or branches on service identifiers.
 // ---------------------------------------------------------------------------
-CCCD.components.PrepaidSimTable = {
+CCCD.components.SubscriberList = {
   props: { layout: Object, root: Object },
   emits: ["open-calendar"],
+  watch: {
+    rows: {
+      deep: true,
+      handler() {
+        this.validateSubscriberDuplicates();
+      },
+    },
+  },
+  mounted() {
+    this.validateSubscriberDuplicates();
+  },
   computed: {
     rows() {
-      if (!Array.isArray(this.root.prepaid_subscribers) || !this.root.prepaid_subscribers.length) {
-        this.root.prepaid_subscribers = [{ subscriber_number: "", sim_serial: "", activation_date: "" }];
+      if (!Array.isArray(this.root.subscribers) || !this.root.subscribers.length) {
+        this.root.subscribers = [this.blankRow()];
       }
-      return this.root.prepaid_subscribers;
+      return this.root.subscribers;
+    },
+    columns() {
+      return this.layout?.columns || [];
+    },
+    canAdd() {
+      const maximum = Number(this.layout?.max_rows || 0);
+      return !maximum || this.rows.length < maximum;
     },
   },
   methods: {
+    blankRow() {
+      const today = new Date();
+      const pad = (n) => String(n).padStart(2, "0");
+      return {
+        subscriber_number: "", monthly_fee: "", commitment_months: "12",
+        activation_date: `${pad(today.getDate())}/${pad(today.getMonth() + 1)}/${today.getFullYear()}`,
+        sim_serial: "", commitment_note: "",
+      };
+    },
     descriptor(column, index) {
-      return { ...column, path: `prepaid_subscribers.${index}.${column.name}` };
+      return { ...column, path: `subscribers.${index}.${column.name}` };
     },
     value(column, index) {
       return String(this.rows[index]?.[column.name] ?? "");
     },
     error(column, index) {
-      return CCCD.state.ui.errors[`prepaid_subscribers.${index}.${column.name}`] || "";
+      return CCCD.state.ui.errors[`subscribers.${index}.${column.name}`] || "";
     },
     setValue(column, index, value) {
       this.rows[index][column.name] = value;
-      delete CCCD.state.ui.errors[`prepaid_subscribers.${index}.${column.name}`];
-      if (index === 0 && column.name === "subscriber_number") this.root.subscriber_number = value;
-      if (index === 0 && column.name === "sim_serial") this.root.sim_serial = value;
-      if (index === 0 && column.name === "activation_date") this.root.activation_date = value;
+      const path = `subscribers.${index}.${column.name}`;
+      if (column.kind === "date" && CCCD.dateInput.looksComplete(value)) {
+        const message = CCCD.dateInput.error(value);
+        if (message) CCCD.state.ui.errors[path] = message;
+        else delete CCCD.state.ui.errors[path];
+      } else {
+        delete CCCD.state.ui.errors[path];
+      }
+      if (index === 0 && column.name === "subscriber_number") {
+        this.root.subscriber_number = value;
+        this.root.subscriber_number_1 = value;
+      }
+      if (column.name === "subscriber_number") this.validateSubscriberDuplicates();
+    },
+    validateSubscriberDuplicates() {
+      for (const [path, message] of Object.entries(CCCD.state.ui.errors)) {
+        if (
+          /^subscribers\.\d+\.subscriber_number$/.test(path)
+          && String(message).startsWith(DUPLICATE_SUBSCRIBER_ERROR_PREFIX)
+        ) delete CCCD.state.ui.errors[path];
+      }
+      for (const indexes of CCCD.subscriberInput.duplicateGroups(this.rows)) {
+        const rowNumbers = indexes.map((index) => index + 1).join(", ");
+        const message = `${DUPLICATE_SUBSCRIBER_ERROR_PREFIX} ${rowNumbers}`;
+        for (const index of indexes) {
+          CCCD.state.ui.errors[`subscribers.${index}.subscriber_number`] = message;
+        }
+      }
+    },
+    validateDate(column, index, rawValue) {
+      const path = `subscribers.${index}.${column.name}`;
+      const value = String(rawValue ?? this.value(column, index)).trim();
+      if (!value) {
+        if (CCCD.state.ui.errors[path] === DATE_INPUT_ERROR) delete CCCD.state.ui.errors[path];
+        return;
+      }
+      const message = CCCD.dateInput.error(value);
+      if (message) {
+        CCCD.state.ui.errors[path] = message;
+        return;
+      }
+      if (value) this.rows[index][column.name] = CCCD.dateInput.format(CCCD.dateInput.parse(value));
+      delete CCCD.state.ui.errors[path];
     },
     addRow() {
-      if (this.rows.length < this.layout.max_rows) {
-        this.rows.push({ subscriber_number: "", sim_serial: "", activation_date: "" });
-      }
+      if (this.canAdd) this.rows.push(this.blankRow());
     },
     removeRow(index) {
-      if (this.rows.length === 1) {
-        this.rows.splice(0, 1, { subscriber_number: "", sim_serial: "", activation_date: "" });
-      } else {
-        this.rows.splice(index, 1);
+      if (this.rows.length === 1) this.rows.splice(0, 1, this.blankRow());
+      else this.rows.splice(index, 1);
+      for (const path of Object.keys(CCCD.state.ui.errors)) {
+        if (path.startsWith("subscribers.")) delete CCCD.state.ui.errors[path];
       }
-      const first = this.rows[0];
-      this.root.subscriber_number = first.subscriber_number || "";
-      this.root.sim_serial = first.sim_serial || "";
-      this.root.activation_date = first.activation_date || "";
+      this.root.subscriber_number = this.rows[0]?.subscriber_number || "";
+      this.root.subscriber_number_1 = this.root.subscriber_number;
+      this.validateSubscriberDuplicates();
     },
     openDate(column, index, event) {
       this.$emit("open-calendar", { field: this.descriptor(column, index), root: this.root, $event: event });
     },
   },
   template: `
-    <div class="subscriber-table prepaid-sim-table">
+    <div class="subscriber-table">
       <div class="subscriber-table__header">
-        <div>
-          <div class="subscriber-table__title">{{ layout.title }}</div>
-          <div class="subscriber-table__hint">{{ layout.hint }}</div>
-        </div>
-        <button v-if="rows.length < layout.max_rows" type="button" class="btn btn--ghost subscriber-table__add"
-          @click="addRow">＋ Thêm số</button>
+        <button v-if="canAdd" type="button" class="btn btn--ghost subscriber-table__add" @click="addRow">＋ Thêm số thuê bao khác</button>
       </div>
       <div class="subscriber-table__scroll">
-        <table class="subscriber-table__grid prepaid-sim-table__grid">
-          <colgroup><col class="subscriber-table__col-index"><col v-for="c in layout.columns" :key="c.name"><col class="subscriber-table__col-actions"></colgroup>
-          <thead><tr><th class="subscriber-table__index">STT</th><th v-for="c in layout.columns" :key="c.name">{{ c.label }}</th><th><span class="sr-only">Thao tác</span></th></tr></thead>
+        <table class="subscriber-table__grid">
+          <colgroup><col class="subscriber-table__col-index"><col v-for="c in columns" :key="c.name"><col class="subscriber-table__col-actions"></colgroup>
+          <thead><tr><th class="subscriber-table__index">STT</th><th v-for="c in columns" :key="c.name">{{ c.label }}</th><th><span class="sr-only">Thao tác</span></th></tr></thead>
           <tbody>
             <tr v-for="(row, rowIndex) in rows" :key="rowIndex">
               <td class="subscriber-table__index"><span>{{ rowIndex + 1 }}</span></td>
-              <td v-for="column in layout.columns" :key="column.name">
+              <td v-for="column in columns" :key="column.name">
                 <div class="subscriber-table__input-wrap" :data-invalid="!!error(column, rowIndex)">
                   <composition-safe-control class="subscriber-table__input"
                     :numeric="column.kind === 'number'"
-                    :readonly="column.kind === 'date'" :inputmode="column.kind === 'number' ? 'numeric' : 'text'"
+                    :inputmode="column.kind === 'number' ? 'numeric' : 'text'"
                     :placeholder="column.kind === 'date' ? 'dd/mm/yyyy' : 'Nhập ' + column.label.toLowerCase()"
                     :model-value="value(column, rowIndex)"
                     @update:model-value="setValue(column, rowIndex, $event)"
-                    @click="column.kind === 'date' && openDate(column, rowIndex, $event)" />
+                    @blur="column.kind === 'date' && validateDate(column, rowIndex, $event)" />
+                  <button v-if="column.kind === 'date'" type="button" class="subscriber-table__date-trigger"
+                    aria-label="Chọn từ lịch" @click="openDate(column, rowIndex, $event)">📅</button>
                 </div>
                 <div v-if="error(column, rowIndex)" class="field__error">{{ error(column, rowIndex) }}</div>
               </td>
@@ -426,23 +461,6 @@ CCCD.components.OrganizationInformationForm = {
         <div v-for="cell in row" :key="cell.field.path" class="information-form__cell">
           <field-input :field="cell.field" :root="root"
             @open-calendar="$emit('open-calendar', $event)" />
-        </div>
-      </div>
-    </div>
-  `,
-};
-
-CCCD.components.SubscriberInformationForm = {
-  props: { rows: Array, root: Object },
-  emits: ["open-calendar", "entity-type-changed"],
-  template: `
-    <div class="information-form information-form--subscriber">
-      <div v-for="(row, ri) in rows" :key="ri" class="information-form__row">
-        <div v-for="cell in row" :key="cell.field.path"
-          :class="['information-form__cell', 'information-form__cell--span-' + cell.span]">
-          <field-input :field="cell.field" :root="root"
-            @open-calendar="$emit('open-calendar', $event)"
-            @entity-type-changed="$emit('entity-type-changed', $event)" />
         </div>
       </div>
     </div>
@@ -522,15 +540,6 @@ CCCD.components.Tabs = {
 // never Date-parsed-as-UTC (the classic off-by-one bug this doc warns about).
 // ---------------------------------------------------------------------------
 const WEEKDAYS = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
-function parseDMY(s) {
-  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec((s || "").trim());
-  if (!m) return null;
-  const [, d, mo, y] = m.map(Number);
-  return { y, m: mo, d };
-}
-function fmtDMY({ y, m, d }) {
-  return `${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}/${y}`;
-}
 function todayYMD() {
   const t = new Date();
   return { y: t.getFullYear(), m: t.getMonth() + 1, d: t.getDate() };
@@ -582,8 +591,19 @@ CCCD.components.CalendarPopover = {
         isSelected: !!selected && c.y === selected.y && c.m === selected.m && c.d === selected.d,
       }));
     },
-    label() {
-      return `Tháng ${this.viewMonth}, ${this.viewYear}`;
+    monthLabel() {
+      return `Tháng ${this.viewMonth}`;
+    },
+    yearOptions() {
+      // Cover birth dates as well as long-lived SIM/identity expiry dates.
+      // Always include the displayed year so opening the picker can never
+      // show a month grid whose year is missing from the year selector.
+      const currentYear = todayYMD().y;
+      const newest = Math.max(currentYear + 100, this.viewYear);
+      const oldest = Math.min(currentYear - 120, this.viewYear);
+      const years = [];
+      for (let y = newest; y >= oldest; y--) years.push(y);
+      return years;
     },
   },
   mounted() {
@@ -602,6 +622,9 @@ CCCD.components.CalendarPopover = {
     nextMonth() {
       if (this.viewMonth === 12) { this.viewMonth = 1; this.viewYear++; } else this.viewMonth++;
     },
+    setYear(y) {
+      this.viewYear = Number(y);
+    },
     pick(cell) {
       this.$emit("pick", fmtDMY({ y: cell.y, m: cell.m, d: cell.d }));
     },
@@ -610,7 +633,12 @@ CCCD.components.CalendarPopover = {
     <div class="calendar-popover" :style="style">
       <div class="calendar__nav">
         <button type="button" class="calendar__nav-btn" @click="prevMonth">‹</button>
-        <span>{{ label }}</span>
+        <div class="calendar__nav-center">
+          <span>{{ monthLabel }}</span>
+          <select class="calendar__year-select" :value="viewYear" @change="setYear($event.target.value)">
+            <option v-for="y in yearOptions" :key="y" :value="y">{{ y }}</option>
+          </select>
+        </div>
         <button type="button" class="calendar__nav-btn" @click="nextMonth">›</button>
       </div>
       <div class="calendar__grid">
@@ -619,74 +647,6 @@ CCCD.components.CalendarPopover = {
           :data-muted="c.muted" :data-today="c.isToday" :data-selected="c.isSelected"
           @click="pick(c)">{{ c.d }}</button>
       </div>
-    </div>
-  `,
-};
-
-// ---------------------------------------------------------------------------
-// UploadCard -- UI-element/drap&drop.md + progresssRing...md: a single
-// intake dropzone (click -> native file dialog; HTML5 drop -> base64 bytes,
-// since Chromium never exposes a real path for a dropped File), two
-// front/back preview cards, and a determinate progress bar during OCR.
-// ---------------------------------------------------------------------------
-CCCD.components.UploadCard = {
-  props: { target: String }, // "customer" | "new_owner"
-  data() {
-    return { dragActive: false };
-  },
-  computed: {
-    upload() {
-      return CCCD.state.ui.upload[this.target];
-    },
-  },
-  methods: {
-    click() {
-      CCCD.bridge.selectAndScanImages(this.target);
-    },
-    onDragOver(e) {
-      e.preventDefault();
-      this.dragActive = true;
-    },
-    onDragLeave() {
-      this.dragActive = false;
-    },
-    async onDrop(e) {
-      e.preventDefault();
-      this.dragActive = false;
-      const files = [...e.dataTransfer.files].filter((f) => /\.(jpe?g|png|bmp|webp)$/i.test(f.name));
-      for (const file of files) {
-        const base64 = await this.readAsBase64(file);
-        CCCD.bridge.submitDroppedImage(this.target, file.name, base64);
-      }
-    },
-    readAsBase64(file) {
-      return new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result.split(",", 2)[1]);
-        reader.readAsDataURL(file);
-      });
-    },
-  },
-  template: `
-    <div class="card card--upload">
-      <div class="dropzone" :data-drag-active="dragActive" :data-invalid="upload.invalid"
-        @click="click" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop">
-        <div class="dropzone__title">Gửi ảnh vào đây</div>
-      </div>
-      <div v-if="upload.progress" class="progress">
-        <div class="progress__value" :style="{ width: (100 * upload.progress.done / upload.progress.total) + '%' }"></div>
-      </div>
-      <div v-if="upload.front || upload.back" class="eyebrow">ẢNH ĐÃ NHẬN DIỆN</div>
-      <div class="preview-row" v-if="upload.front || upload.back">
-        <div class="preview-card" v-for="side in ['front','back']" :key="side" v-show="upload[side]">
-          <img v-if="upload[side]" class="preview-card__media" :src="upload[side].thumbnail">
-          <div class="preview-card__body" v-if="upload[side]">
-            <span class="badge" data-detected="true">{{ side === 'front' ? 'MẶT TRƯỚC' : 'MẶT SAU' }}</span>
-            <span class="preview-card__filename">{{ upload[side].filename }}</span>
-          </div>
-        </div>
-      </div>
-      <div v-if="upload.note" class="upload-note" :data-invalid="upload.invalid">{{ upload.note }}</div>
     </div>
   `,
 };

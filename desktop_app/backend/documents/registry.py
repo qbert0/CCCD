@@ -6,6 +6,7 @@ from .aftersale import AftersaleDocumentModule
 from .base import BaseDocumentModule
 from .beautiful_number import BeautifulNumberDocumentModule
 from .prepaid_contract import PrepaidContractDocumentModule
+from .sim_change_form import SimChangeFormDocumentModule
 from .transfer import TransferDocumentModule
 
 
@@ -16,6 +17,7 @@ class DocumentRegistry:
             AftersaleDocumentModule(),
             BeautifulNumberDocumentModule(),
             PrepaidContractDocumentModule(),
+            SimChangeFormDocumentModule(),
         ]
         self._modules = {module.document_type: module for module in modules}
 

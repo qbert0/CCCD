@@ -88,15 +88,14 @@ DOCUMENT_FIELD_META: dict[str, FieldMeta] = {
     "document_date": FieldMeta(FieldSource.AUTO, FieldTier.PRIMARY, FieldWidth.SHORT),
     "shop_name": FieldMeta(FieldSource.SHOP, FieldTier.PRIMARY, FieldWidth.LONG),
     "shop_address": FieldMeta(FieldSource.SHOP, FieldTier.PRIMARY, FieldWidth.LONG),
-    # Not FieldSource.SHOP: unlike shop_name/shop_address it isn't shown on
-    # every document (only Aftersale/Prepaid), and the Company Profile
-    # dialog's own form doesn't surface a phone field to set a shared
-    # default from anyway. OPERATOR keeps it a plain in-form field that's
-    # simply remembered for the current session, like staff_name.
+    # Kept OPERATOR for backward-compatible session persistence. When the
+    # company profile has phone values they explicitly win at new-case time.
     "shop_phone": FieldMeta(FieldSource.OPERATOR, FieldTier.PRIMARY, FieldWidth.SHORT),
     "shop_phone_2": FieldMeta(FieldSource.OPERATOR, FieldTier.DETAIL, FieldWidth.SHORT),
     "shop_phone_3": FieldMeta(FieldSource.OPERATOR, FieldTier.DETAIL, FieldWidth.SHORT),
-    "staff_name": FieldMeta(FieldSource.OPERATOR, FieldTier.PRIMARY, FieldWidth.SHORT),
+    # Selected from the dynamic clerk profile assigned to this service. It
+    # remains editable for the current dossier but is never one global value.
+    "staff_name": FieldMeta(FieldSource.AUTO, FieldTier.PRIMARY, FieldWidth.SHORT),
     "provider_representative": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
     "provider_position": FieldMeta(FieldSource.DOCUMENT, FieldTier.DETAIL, FieldWidth.SHORT),
     "provider_phone": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),

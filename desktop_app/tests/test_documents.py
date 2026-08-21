@@ -92,7 +92,7 @@ class DocumentTest(unittest.TestCase):
             self.assertEqual(output.suffix, ".docx")
             text = docx_text(output)
             self.assertIn("0925123456", text)
-            self.assertIn("NGUYỄN VĂN AN", text)
+            self.assertIn("Nguyễn Văn An", text)
             self.assertIn("001099999999", text)
             self.assertIn("500.000đ", text)
             self.assertNotIn("{{", text)
@@ -238,52 +238,119 @@ class DocumentTest(unittest.TestCase):
             self.assertIn("TRẦN THỊ B", text)
             self.assertIn("001204001289", text)
             self.assertIn("0925123456", text)
-            self.assertIn("HĐ-2026-01 ngày 10 tháng 08 năm 2026", text)
+            # source_contract_number is a "số: {{ }}" label field, so the
+            # template bakes a trailing dotted marker onto it (space-
+            # separated -- see scripts/bake_field_highlighting.py);
+            # day/month/year fragments never get one.
+            self.assertIn("HĐ-2026-01 ..... ngày 10 tháng 08 năm 2026", text)
             self.assertIn("Hôm nay, ngày 11 tháng 08 năm 2026", text)
             self.assertNotIn("{{", text)
             self.assertNotIn("{{pay_method}}", text)
             self.assertNotIn("Cty TNHH Viễn Thông Tiến Prô", text)
             self.assertNotIn("Trụ sở chính\nBa Đình, Bỉm Sơn", text)
 
-    def test_transfer_and_prepaid_keep_default_b_signature(self):
+    def test_transfer_with_multiple_subscribers_clones_a_real_row_per_number(self):
+        with tempfile.TemporaryDirectory() as folder:
+            data = self.report(DocumentType.TRANSFER)
+            data.subscribers = [
+                {"subscriber_number": "0925123456"},
+                {"subscriber_number": "0925111222"},
+                {"subscriber_number": "0925333444"},
+            ]
+            output = self.registry.for_data(data).generate(data, Path(folder))
+            table = Document(str(output)).tables[0]
+            data_rows = table.rows[-3:]
+            self.assertEqual([row.cells[0].text for row in data_rows], [
+                "Số thuê bao 1", "Số thuê bao 2", "Số thuê bao 3",
+            ])
+            for row, number in zip(data_rows, ("0925123456", "0925111222", "0925333444")):
+                self.assertEqual(row.cells[1].text, number)
+                self.assertEqual(row.cells[2].text, number)
+            text = docx_text(output)
+            self.assertIn("0925123456, 0925111222, 0925333444", text)
+
+    def test_aftersale_with_multiple_subscribers_joins_them_into_the_existing_blank(self):
+        with tempfile.TemporaryDirectory() as folder:
+            data = self.report(DocumentType.AFTERSALE)
+            data.service_action = "Chuyển chủ quyền"
+            data.subscribers = [
+                {"subscriber_number": "0925123456"},
+                {"subscriber_number": "0925111222"},
+            ]
+            output = self.registry.for_data(data).generate(data, Path(folder))
+            text = docx_text(output)
+            self.assertIn("0925123456, 0925111222", text)
+            # Subscriber numbers still join into the existing sentence
+            # blank, not a table -- the one table in this document now is
+            # the (unrelated) signature block.
+            self.assertEqual(len(Document(str(output)).tables), 1)
+
+    def test_aftersale_identity_block_uses_the_actual_organization_requester(self):
+        # The form labels this block "Khách hàng/Người yêu cầu". An
+        # organization transfer therefore prints the old owner's company,
+        # not an unrelated global shop identity.
+        with tempfile.TemporaryDirectory() as folder:
+            data = self.report(DocumentType.AFTERSALE)
+            data.customer = PersonData(
+                entity_type="Tổ chức",
+                organization_name="CÔNG TY CHỦ CŨ ABC",
+                business_registration_number="9999999999",
+                business_registration_issue_date="01/01/2019",
+                business_registration_issue_place="Sở KHĐT nào đó",
+                headquarters_address="Địa chỉ chủ cũ",
+            )
+            data.service_action = "Chuyển chủ quyền"
+            output = self.registry.for_data(data).generate(data, Path(folder))
+            text = docx_text(output)
+            self.assertIn("CÔNG TY CHỦ CŨ ABC", text)
+            self.assertIn("9999999999", text)
+            self.assertIn("Địa chỉ chủ cũ", text)
+            self.assertNotIn("0101234567", text)
+
+    def test_transfer_and_prepaid_print_the_actual_provider_representative(self):
+        # Bên B's signature name used to be a literal "VÕ DUY NHẬT" baked
+        # into the template regardless of who was actually signing -- both
+        # templates now carry a real {{ provider_representative }} token
+        # (plus its {{ provider_representative_given_name }} "ký tên" line,
+        # replacing what used to be the company stamp+signature image), so
+        # the printed name must track data.provider_representative and the
+        # hardcoded name must never appear.
         with tempfile.TemporaryDirectory() as folder:
             transfer = self.report(DocumentType.TRANSFER)
             output = self.registry.for_data(transfer).generate(transfer, Path(folder))
             text = docx_text(output)
-            self.assertIn("VÕ DUY NHẬT", text)
-            self.assertNotIn("LÊ THỊ ĐẠI DIỆN", text)
+            self.assertIn("Lê Thị Đại Diện", text)
+            self.assertIn("Diện", text)  # the "ký tên" given-name line
+            self.assertNotIn("VÕ DUY NHẬT", text)
 
         with tempfile.TemporaryDirectory() as folder:
             prepaid = self.report(DocumentType.PREPAID_CONTRACT)
             output = self.registry.for_data(prepaid).generate(prepaid, Path(folder))
             text = docx_text(output)
             self.assertIn("LÊ THỊ ĐẠI DIỆN", text)
-            self.assertIn("VÕ DUY NHẬT", text)
+            self.assertIn("Diện", text)
+            self.assertNotIn("VÕ DUY NHẬT", text)
 
-    def test_transfer_template_keeps_c_a_b_signature_order_and_prints_hour_only(self):
-        def signature_positions(document):
-            positions = {}
-            verticals = set()
-            for anchor in document._element.iter(qn("wp:anchor")):
-                anchor_text = "".join(node.text or "" for node in anchor.iter(qn("w:t")))
-                for party in ("C", "A", "B"):
-                    if f"Đại diện Bên {party}" in anchor_text:
-                        positions[party] = anchor.find(
-                            "wp:positionH/wp:posOffset", anchor.nsmap
-                        ).text
-                        verticals.add(anchor.find(
-                            "wp:positionV/wp:posOffset", anchor.nsmap
-                        ).text)
-            return positions, verticals
-
+    def test_transfer_template_signature_table_prints_each_party_and_hour_only(self):
+        # The signature block used to be three absolutely-positioned
+        # floating text boxes -- fragile to edit and impossible to add a
+        # signature image into without breaking the layout (see the fixed
+        # prepaid_contract equivalent). It's a real table now: row 0 =
+        # heading/hint, row 1 = a fixed-height signature area, row 2 = the
+        # name -- a real table row's height is uniform across every column
+        # by construction, which is what keeps the 3 printed names aligned
+        # regardless of Bên B's column alone carrying a signature image
+        # (previously approximated with manual blank-paragraph padding,
+        # which drifted out of alignment once a real image was added).
+        # Column ORDER isn't asserted here (this table gets hand-edited in
+        # Word from time to time and the shop is free to reorder its own
+        # columns) -- only that each of the 3 "Đại diện Bên X" columns still
+        # carries the right content, wherever it physically sits.
         with tempfile.TemporaryDirectory() as folder:
             data = self.report(DocumentType.TRANSFER)
             data.customer.full_name = "NGUYỄN ĐẠI DIỆN BÊN A"
             data.transfer_time = "03:45"  # old saved state is normalized while rendering
             module = self.registry.for_data(data)
-            template_positions, template_verticals = signature_positions(
-                Document(str(module.template))
-            )
             output = module.preview(data, Path(folder))
             document = Document(str(output))
             text = docx_text(output)
@@ -291,16 +358,74 @@ class DocumentTest(unittest.TestCase):
             self.assertNotIn("03:45", text)
             self.assertIn("NGUYỄN ĐẠI DIỆN BÊN A", text)
 
-            self.assertEqual(set(template_positions), {"C", "A", "B"})
-            self.assertEqual(
-                sorted(template_positions, key=lambda party: int(template_positions[party])),
-                ["C", "A", "B"],
+            signature_table = next(
+                t for t in document.tables
+                if any("Đại diện Bên A" in cell.text.splitlines()[0] for cell in t.rows[0].cells)
             )
-            self.assertEqual(template_verticals, {"152400"})
+            self.assertEqual(len(signature_table.rows), 3)
+            column_count = len(signature_table.rows[0].cells)
+            cells_by_party = {
+                signature_table.rows[0].cells[col].text.splitlines()[0]: "\n".join(
+                    signature_table.rows[row].cells[col].text for row in range(len(signature_table.rows))
+                )
+                for col in range(column_count)
+            }
+            self.assertEqual(set(cells_by_party), {"Đại diện Bên A", "Đại diện Bên B", "Đại diện Bên C"})
+            # Signature-line names print in the embedded Great Vibes script
+            # font, which is title-cased rather than the all-caps used
+            # everywhere else (see renderer.py::_replace_placeholders) --
+            # a full-caps run through a cursive connecting face reads as
+            # tangled, illegible strokes instead of a real signature.
+            self.assertIn("Nguyễn Đại Diện Bên A", cells_by_party["Đại diện Bên A"])
+            self.assertIn("Lê Thị Đại Diện", cells_by_party["Đại diện Bên B"])
+            # Bên C is the new owner's own name (new_owner_signature_name),
+            # a variable independent from Bên B's provider_representative --
+            # an earlier round briefly had Bên C reuse Bên B's exact
+            # variable, which made the two cells always print the identical
+            # value (a real bug the user caught: "nó có giá trị giống nhau
+            # này"). They must stay different fields even when, by
+            # coincidence, they'd render the same text.
+            self.assertIn("Trần Thị B", cells_by_party["Đại diện Bên C"])
+            self.assertNotIn("Lê Thị Đại Diện", cells_by_party["Đại diện Bên C"])
 
-            output_positions, output_verticals = signature_positions(document)
-            self.assertEqual(output_positions, template_positions)
-            self.assertEqual(output_verticals, template_verticals)
+    def test_prepaid_contract_signature_table_bien_a_is_not_bien_b(self):
+        # Bên A and Bên B used to share one token ({{ provider_representative
+        # }} in both cells) -- the same class of bug already fixed for
+        # transfer's Bên C. Bên A must print whoever is actually taking over
+        # the subscription (the customer signing for themselves in legacy
+        # mode), independent of Bên B's fixed provider identity.
+        with tempfile.TemporaryDirectory() as folder:
+            data = self.report(DocumentType.PREPAID_CONTRACT)
+            output = self.registry.for_data(data).generate(data, Path(folder))
+            document = Document(str(output))
+            signature_table = next(
+                t for t in document.tables
+                if any(
+                    cell.text and "ĐẠI DIỆN BÊN A" in cell.text.splitlines()[0]
+                    for cell in t.rows[0].cells
+                )
+            )
+            self.assertEqual(len(signature_table.rows), 3)
+            cells_by_party = {
+                signature_table.rows[0].cells[col].text.splitlines()[0]: "\n".join(
+                    signature_table.rows[row].cells[col].text for row in range(len(signature_table.rows))
+                )
+                for col in range(len(signature_table.rows[0].cells))
+            }
+            # Signature-line names print in the embedded Great Vibes script
+            # font, which is title-cased rather than the all-caps used
+            # everywhere else (see renderer.py::_replace_placeholders).
+            self.assertIn("Nguyễn Văn An", cells_by_party["ĐẠI DIỆN BÊN A"])
+            self.assertIn("Lê Thị Đại Diện", cells_by_party["ĐẠI DIỆN BÊN B"])
+            self.assertNotIn("Lê Thị Đại Diện", cells_by_party["ĐẠI DIỆN BÊN A"])
+
+            # The signature row must hold a fixed minimum height even when a
+            # column carries no image (Bên A never does) -- otherwise there's
+            # no blank space left for a physical signature.
+            signature_row_tr_pr = signature_table.rows[1]._tr.find(qn("w:trPr"))
+            row_height = signature_row_tr_pr.find(qn("w:trHeight"))
+            self.assertEqual(row_height.get(qn("w:hRule")), "exact")
+            self.assertGreater(int(row_height.get(qn("w:val"))), 1000)
 
     def test_transfer_rejects_same_current_and_new_owner(self):
         data = self.report(DocumentType.TRANSFER)
@@ -346,17 +471,44 @@ class DocumentTest(unittest.TestCase):
             text = docx_text(output)
             self.assertIn("Ngày 11 tháng 08 năm 2026", text)
             self.assertIn("Shop Xã Đàn", text)
-            self.assertIn("Địa chỉ: 123 Xã Đàn, Hà Nội", text)
+            # The template was hand-edited to drop {{ aftersale_shop_address
+            # }}/{{ aftersale_shop_phone }} entirely -- the shop no longer
+            # wants this auto-filled here, just a blank line to write on by
+            # hand. data.shop_address/shop_phone (set above) simply go
+            # unused for this document type now; confirm the blank stays a
+            # plain dotted line, not a leftover unresolved token.
+            self.assertNotIn("{{ aftersale_shop_address }}", text)
             self.assertIn("0925123456", text)
-            # The document's identity block prints the COMPANY's own
-            # registration identity now, by explicit request -- not the
-            # actual customer's address/phone. The current template leaves
-            # signature names blank for handwritten signatures.
-            self.assertIn("Số CMND/CCCD: 0101234567", text)
+            # Individual services and SIM replacement must print the
+            # scanned person, while organization services print the actual
+            # organization requester.
+            self.assertIn("Số CMND/CCCD: 001099999999", text)
             self.assertNotIn("Người đại diện:", text)
-            self.assertNotIn("NGUYỄN VĂN AN", text)
+            self.assertIn("NGUYỄN VĂN AN", text)
+            self.assertIn("Nguyễn Giao Dịch", text)
             self.assertNotIn("{{", text)
             self.assertNotIn("CÔNG TY TNHH VIỄN THÔNG TIẾN PRÔ", text)
+
+    def test_aftersale_clerk_signature_has_both_ky_ten_and_full_name_lines(self):
+        # Every signature is 2 lines now instead of a real signature image:
+        # "ký tên" (just the given name, the actual signature stroke) above
+        # "ghi rõ họ tên" (the full name) -- both in the embedded Great
+        # Vibes script font.
+        with tempfile.TemporaryDirectory() as folder:
+            data = self.report(DocumentType.AFTERSALE)
+            output = self.registry.for_data(data).generate(data, Path(folder))
+            document = Document(str(output))
+            self.assertIn("Nguyễn Giao Dịch", docx_text(output))
+            given_name_runs = [
+                run for paragraph in document.paragraphs + [
+                    p for table in document.tables for row in table.rows
+                    for cell in row.cells for p in cell.paragraphs
+                ]
+                for run in paragraph.runs
+                if run.text == "Dịch"
+            ]
+            self.assertTrue(given_name_runs)
+            self.assertEqual(given_name_runs[0].font.name, "Great Vibes")
 
     def test_aftersale_only_fills_the_selected_service(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -370,8 +522,12 @@ class DocumentTest(unittest.TestCase):
             self.assertIn("☐ Cập nhật thông tin", text)
             self.assertIn("☐ Thay SIM", text)
             self.assertRegex(text, r"Vietnamobile: \.{20,}")
-            self.assertIn("cho Ông/Bà TRẦN THỊ B", text)
-            self.assertIn("số điện thoại 2: 0987000111", text)
+            # Filled values are bold+bigger and dotted (space-separated
+            # from the value, both sides mid-sentence or trailing-only
+            # after a "Nhãn:" label) -- baked directly into the template's
+            # own placeholder runs, see scripts/bake_field_highlighting.py.
+            self.assertIn("cho Ông/Bà ..... TRẦN THỊ B .....", text)
+            self.assertIn("số điện thoại 2: 0987000111 .....", text)
             self.assertNotIn("số điện thoại 2: 0900000000", text)
 
             document = Document(output)
@@ -394,26 +550,36 @@ class DocumentTest(unittest.TestCase):
                 self.assertIsNone(properties.find(qn("w:spacing")))
                 self.assertEqual(properties.find(qn("w:sz")).get(qn("w:val")), "30")
                 self.assertEqual(properties.find(qn("w:szCs")).get(qn("w:val")), "30")
-            signature_text = "\n".join(p.text for p in document.paragraphs)
-            self.assertIn("NGƯỜI YÊU CẦU", signature_text)
-            self.assertIn("CHỦ THUÊ BAO MỚI", signature_text)
-            self.assertIn("GIAO DỊCH VIÊN", signature_text)
-            final_columns = document._element.body.sectPr.xpath("./w:cols")[0]
-            self.assertEqual(
-                final_columns.get(
-                    "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}num"
-                ),
-                "3",
+            # The signature block is a real 3-row table now (was a 3-column
+            # SECTION with linear paragraph flow -- the same class of
+            # fragility already fixed for the other 4 templates' signature
+            # blocks). Row 0 = heading/hint, row 1 = a fixed-height
+            # signature area, row 2 = the printed name -- so the 3 names
+            # stay aligned regardless of which column carries an image.
+            signature_table = next(
+                t for t in document.tables
+                if any("NGƯỜI YÊU CẦU" in cell.text for cell in t.rows[0].cells)
             )
-            for paragraph in document.paragraphs:
-                if paragraph.text.strip() in {
-                    "NGƯỜI YÊU CẦU", "CHỦ THUÊ BAO MỚI", "GIAO DỊCH VIÊN",
-                    "(Ký và ghi rõ họ tên)",
-                }:
-                    self.assertEqual(
-                        paragraph._p.pPr.find(qn("w:jc")).get(qn("w:val")),
-                        "center",
-                    )
+            self.assertEqual(len(signature_table.rows), 3)
+            headers = [cell.text.splitlines()[0] for cell in signature_table.rows[0].cells]
+            self.assertEqual(headers, ["NGƯỜI YÊU CẦU", "CHỦ THUÊ BAO MỚI", "GIAO DỊCH VIÊN"])
+            names = [cell.text for cell in signature_table.rows[2].cells]
+            # Printed names in this table sit in the "Great Vibes" cursive
+            # signature font, which title-cases them at substitution time
+            # (all-caps collides in a script face) -- see renderer.py's
+            # `_replace_placeholders` SIGNATURE_FONT_NAME branch.
+            self.assertIn("Nguyễn Văn An", names[0])  # requester = individual old owner
+            self.assertIn("Trần Thị B", names[1])  # new subscriber owner
+            # The final section (previously forced to 3 columns purely to
+            # fake this layout) is a normal single column now.
+            final_columns = document._element.body.sectPr.xpath("./w:cols")
+            if final_columns:
+                self.assertEqual(
+                    final_columns[0].get(
+                        "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}num"
+                    ),
+                    "1",
+                )
 
     def test_aftersale_template_keeps_equal_marks_and_readable_body_spacing(self):
         data = self.report(DocumentType.AFTERSALE)
@@ -561,6 +727,12 @@ class DocumentTest(unittest.TestCase):
 
         _replace_placeholders(paragraph, {"customer_name": "NGUYỄN VĂN AN"})
 
+        # _replace_placeholders only substitutes text now -- bold/size/dots
+        # are baked directly into each template's own placeholder runs
+        # instead (scripts/bake_field_highlighting.py), so a hand-built
+        # paragraph like this one (no baked formatting of its own) gets a
+        # plain substitution, keeping whatever formatting was already on
+        # each surrounding run untouched.
         self.assertEqual(paragraph.text, "Họ tên: NGUYỄN VĂN AN / giữ nguyên")
         self.assertTrue(paragraph.runs[0].bold)
         self.assertTrue(paragraph.runs[1].italic)

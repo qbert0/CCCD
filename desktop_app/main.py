@@ -13,9 +13,10 @@ from pathlib import Path
 if getattr(sys, "frozen", False):
     os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QSettings
 from PyQt5.QtWidgets import QApplication
 
+from desktop_app.backend.config.seed_settings import seed_settings_if_empty
 from desktop_app.backend.documents import DocumentRegistry
 from desktop_app.backend.domain.models import DocumentType, PersonData, ReportData
 from desktop_app.backend.ocr import OCRService
@@ -72,6 +73,7 @@ def main() -> int:
     app.setApplicationName("CCCD Report")
     app.setOrganizationName("CCCDReport")
     app.setStyleSheet(APP_STYLE)  # still styles the native QFileDialog/QMessageBox the web bridge opens
+    seed_settings_if_empty(QSettings("CCCDReport", "DesktopApp"))
     window = WebHomePage()
     window.show()
     return app.exec_()

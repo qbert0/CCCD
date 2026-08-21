@@ -23,3 +23,4 @@ desktop_app/data/output/*
 # Real customer scans/filled contracts kept as local dev reference only —
 # never push real people's ID photos or personal data to this public repo.
 desktop_app/data/source/original_documents/
+desktop_app/data/input/
