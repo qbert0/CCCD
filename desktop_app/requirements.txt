@@ -1,0 +1,29 @@
+PyQt5==5.15.11
+PyQtWebEngine==5.15.7
+numpy==1.26.4
+opencv-python==4.11.0.86
+opencv-contrib-python==4.11.0.86
+python-docx==1.2.0
+reportlab==4.4.3
+pypdf==6.0.0
+pillow==10.2.0
+paddlepaddle==2.6.2
+paddleocr==2.9.1
+pyinstaller==6.15.0
+zxing-cpp==3.1.1
+backports.tarfile==1.2.0
+setuptools<81
+vietocr==0.3.13
+--extra-index-url https://download.pytorch.org/whl/cpu
+# PyTorch's "+cpu" build variant is only published for Linux/Windows -- macOS
+# has no separate CPU/GPU distinction, so it only ever ships the plain
+# version string, from the regular PyPI index (not the pytorch.org one
+# above). Verified with `uv pip install --dry-run --python-platform ...`:
+# torch==2.13.0+cpu lists wheels for manylinux/win only; torch==2.13.0 (no
+# suffix) is the one with a macosx_14_0_arm64 wheel. install.sh passes
+# --index-strategy unsafe-best-match so uv will actually consider PyPI for
+# the darwin line instead of stopping at the first index that knows "torch".
+torch==2.13.0+cpu ; sys_platform != "darwin"
+torch==2.13.0 ; sys_platform == "darwin"
+torchvision==0.28.0+cpu ; sys_platform != "darwin"
+torchvision==0.28.0 ; sys_platform == "darwin"

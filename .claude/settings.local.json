@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv --version)",
+      "Bash(py -3.11 --version)",
+      "Bash(git --version)",
+      "PowerShell(Write-Output \"--- InnoSetup ---\"; if \\(Test-Path \"C:\\\\Program Files \\(x86\\)\\\\Inno Setup 6\\\\ISCC.exe\"\\) { \"found ISCC\" } else { \"no ISCC\" }; Write-Output \"--- disk free \\(GB\\) ---\"; \\(Get-PSDrive D\\).Free/1GB)",
+      "PowerShell(irm https://astral.sh/uv/install.ps1 | iex)",
+      "Bash(./product/CCCDReport/CCCDReport.exe --self-test-full)",
+      "Bash(cat /c/Users/MyPc/AppData/Local/Temp/CCCDReport.log 2>&1 | tail -60)",
+      "Read(//c/Users/MyPc/AppData/Local/Temp/**)",
+      "Bash(./.venv-desktop/Scripts/python.exe -c \"import torch; print\\(torch.__version__\\)\")",
+      "Bash(xargs -n1 basename)",
+      "Bash(rm -f /c/Users/MyPc/AppData/Local/Temp/CCCDReport.log)",
+      "Bash(echo \"EXIT CODE: $?\")",
+      "Bash(./.venv-desktop/Scripts/python.exe -c ' *)",
+      "Bash(./.venv-desktop/Scripts/python.exe -m pip install pefile -q)",
+      "PowerShell(Get-MpPreference)",
+      "PowerShell(Get-MpThreatDetection -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-MpComputerStatus -ErrorAction SilentlyContinue)"
+    ]
+  }
+}
