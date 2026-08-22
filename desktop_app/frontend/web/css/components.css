@@ -287,6 +287,21 @@
   gap: var(--space-sm);
 }
 .operator-profile-card__title { color: var(--color-ink); font-size: 14px; font-weight: 600; }
+.operator-profile-card--provider { margin-bottom: var(--space-sm); }
+.signature-upload {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-xs);
+}
+.signature-upload__preview {
+  max-width: 120px;
+  max-height: 48px;
+  object-fit: contain;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-md);
+  background: var(--color-canvas-soft);
+}
 .icon-button {
   display: inline-grid;
   place-items: center;

@@ -12,7 +12,7 @@ from docx.dml.color import RGBColor
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Pt
+from docx.shared import Mm, Pt
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 from pypdf import PdfReader, PdfWriter
@@ -293,8 +293,127 @@ SIGNATURE_GIVEN_NAME_SOURCES = (
     ("aftersale_new_owner_signature_name", "aftersale_new_owner_signature_given_name"),
     ("aftersale_clerk_signature_name", "aftersale_clerk_signature_given_name"),
     ("prepaid_party_a_signature_name", "prepaid_party_a_signature_given_name"),
-    ("provider_representative", "provider_representative_given_name"),
+    # NOT "provider_representative" itself -- that key is ALSO printed
+    # as a plain info mention in prepaid_contract ("Người đại diện: {{
+    # provider_representative }}  Chức vụ: ..."), and a signature-block
+    # key must never be shared with a plain-info one (see
+    # provider_representative_signature below: same value, own key, so
+    # the image/blanking logic in _apply_signature_images can never
+    # reach the info mention no matter how paragraph shapes shift).
+    ("provider_representative_signature", "provider_representative_signature_given_name"),
 )
+
+# Signature slots that can OPTIONALLY be a real image instead of the
+# script-font text lines above -- (given_name key, full_name key, the
+# ReportData attribute holding the image path). Per direct instruction,
+# the image replaces BOTH the "ký tên" (given-name) line and the "họ tên"
+# (full name) line entirely -- no text remains under the image. (An
+# intermediate design kept the full-name line as ordinary script-font
+# text below the image; reversed back to this simpler look per direct
+# instruction.) A floating image OVERLAYING the text was also considered
+# and rejected: this exact codebase already tried floating/anchored
+# images for signatures once before (round 11, the "đè lên" request) and
+# reverted away from them for fragility; replacing the runs outright
+# avoids that class of problem.
+SIGNATURE_IMAGE_SLOTS = (
+    (
+        "provider_representative_signature_given_name", "provider_representative_signature",
+        "provider_signature_path",
+    ),
+    (
+        "aftersale_clerk_signature_given_name", "aftersale_clerk_signature_name",
+        "operator_signature_path",
+    ),
+    (
+        "sim_operator_signature_given_name", "sim_operator_signature_name",
+        "operator_signature_path",
+    ),
+    # The old owner's own org representative -- genuinely per-case (a
+    # different real organization/signer every time), so unlike the 3
+    # above this is never pre-configured in Settings; it's attached fresh
+    # per case (see choose_customer_representative_signature) and lives
+    # on customer itself, not a flat ReportData attribute.
+    (
+        "customer_representative_signature_given_name", "customer_representative_signature_name",
+        "customer.signature_path",
+    ),
+    # Aftersale's "Người yêu cầu" -- same role and same per-case image
+    # source as customer_representative_signature_name above (an org's
+    # own representative, or the individual customer themselves), just
+    # under aftersale's own field names.
+    (
+        "aftersale_requester_signature_given_name", "aftersale_requester_signature_name",
+        "customer.signature_path",
+    ),
+)
+SIGNATURE_IMAGE_HEIGHT = Mm(32)  # doubled from the original Mm(16) per direct instruction; the x1.5 bump to 48 was reverted as too large
+
+# "Người đại diện" (representative_profile) has no dedicated ký-tên/họ-tên
+# signature block anywhere in prepaid_contract -- its name only appears
+# inline, sharing a paragraph with static label text ("Người đại
+# diện/ủy quyền: {{ prepaid_representative_name }}  Chức vụ: ...", same
+# for "Họ tên nhân viên giao dịch: {{ staff_name }}"). Confirmed directly
+# against the template: no image belongs on either -- they are plain
+# informational fields, not a place anyone actually signs.
+
+
+def _resolve_path_attr(data: ReportData, dotted_attr: str) -> str:
+    value: object = data
+    for part in dotted_attr.split("."):
+        value = getattr(value, part, "")
+    return str(value or "")
+
+
+def _insert_signature_image(paragraph: Paragraph, image_path: str) -> None:
+    for run in list(paragraph.runs):
+        run.text = ""
+    run = paragraph.runs[0] if paragraph.runs else paragraph.add_run()
+    run.add_picture(image_path, height=SIGNATURE_IMAGE_HEIGHT)
+
+
+def _clear_paragraph_text(paragraph: Paragraph) -> None:
+    for run in list(paragraph.runs):
+        run.text = ""
+
+
+def _apply_signature_images(paragraphs: list[Paragraph], data: ReportData) -> None:
+    """Runs BEFORE the general placeholder substitution loop, while these
+    paragraphs/runs still hold their raw {{ }} tokens -- an image, when
+    set, replaces the given-name ("ký tên") line AND blanks out the
+    full-name ("họ tên") line right below it, so the image alone stands in
+    for the whole signature block."""
+    for given_key, full_key, path_attr in SIGNATURE_IMAGE_SLOTS:
+        image_path = _resolve_path_attr(data, path_attr)
+        if not image_path or not os.path.isfile(image_path):
+            continue
+        for paragraph in paragraphs:
+            match = _PLACEHOLDER.fullmatch(paragraph.text.strip())
+            if match is None:
+                continue
+            if match.group(1) == given_key:
+                _insert_signature_image(paragraph, image_path)
+            elif match.group(1) == full_key:
+                _clear_paragraph_text(paragraph)
+
+    # prepaid_contract's Bên A signs as new_owner in structured mode
+    # (org -> individual takeover) or as customer itself in legacy mode --
+    # same split _docx_context uses to compute prepaid_party_a_signature_name's
+    # own text, so the image has to follow the same person.
+    prepaid_structured = (
+        data.document_type == DocumentType.PREPAID_CONTRACT
+        and data.prepaid_structured_parties
+    )
+    prepaid_party_a = data.new_owner if prepaid_structured else data.customer
+    image_path = prepaid_party_a.signature_path
+    if image_path and os.path.isfile(image_path):
+        for paragraph in paragraphs:
+            match = _PLACEHOLDER.fullmatch(paragraph.text.strip())
+            if match is None:
+                continue
+            if match.group(1) == "prepaid_party_a_signature_given_name":
+                _insert_signature_image(paragraph, image_path)
+            elif match.group(1) == "prepaid_party_a_signature_name":
+                _clear_paragraph_text(paragraph)
 
 
 def _docx_context(data: ReportData) -> dict[str, str]:
@@ -524,6 +643,11 @@ def _docx_context(data: ReportData) -> dict[str, str]:
         "activation_date": data.activation_date,
         "service_point_name": data.service_point_name,
         "provider_representative": data.provider_representative,
+        # Same value as above, own key -- reserved for the Great Vibes
+        # signature-block cell specifically (see SIGNATURE_IMAGE_SLOTS),
+        # kept separate from the plain-info "provider_representative"
+        # mention above so an image can never land on the wrong one.
+        "provider_representative_signature": data.provider_representative,
         "provider_position": data.provider_position,
         "provider_phone": data.provider_phone,
         "provider_email": data.provider_email,
@@ -870,6 +994,8 @@ def _generate_docx(
             malformed.append(paragraph.text)
     if malformed:
         raise ValueError("Placeholder sai cú pháp trong file mẫu: " + malformed[0])
+
+    _apply_signature_images(template_paragraphs, data)
 
     context = _docx_context(data)
     for paragraph in template_paragraphs:

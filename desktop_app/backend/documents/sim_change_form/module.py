@@ -22,7 +22,7 @@ class SimChangeFormDocumentModule(BaseDocumentModule):
         "frequent_phone_5", "activation_date", "recent_topup_value", "recent_topup_method",
         "remaining_validity", "account_balance", "last_changed_service",
         "customer_signature_name", "customer_signature_given_name",
-        "provider_representative", "provider_representative_given_name",
+        "provider_representative_signature", "provider_representative_signature_given_name",
         "sim_operator_signature_name", "sim_operator_signature_given_name",
     })
     template = resource_path(

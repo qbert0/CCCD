@@ -11,6 +11,7 @@
         representative: null,
         representativeLayout: null,
         operatorProfiles: null,
+        providerSignature: null,
         documentSetSettings: null,
         profileTab: "company",
         profileLoading: false,
@@ -439,15 +440,16 @@
         this.profileLoading = true;
         state.ui.errors = {};
         try {
-          const [person, layout, representative, representativeLayout, operatorProfiles, documentSetSettings] = await Promise.all([
+          const [person, layout, representative, representativeLayout, operatorProfiles, providerSignature, documentSetSettings] = await Promise.all([
             CCCD.bridge.getCompanyProfile(),
             CCCD.bridge.getCompanyProfileLayout(),
             CCCD.bridge.getRepresentativeProfile(),
             CCCD.bridge.getRepresentativeProfileLayout(),
             CCCD.bridge.getOperatorProfiles(),
+            CCCD.bridge.getProviderSignature(),
             CCCD.bridge.getDocumentSetSettings(),
           ]);
-          if (!person || !layout || !representative || !representativeLayout || !operatorProfiles || !documentSetSettings) {
+          if (!person || !layout || !representative || !representativeLayout || !operatorProfiles || !providerSignature || !documentSetSettings) {
             CCCD.pushToast("Không tải được thiết lập mặc định, hãy thử lại", "error");
             return;
           }
@@ -456,6 +458,7 @@
           this.representative = representative;
           this.representativeLayout = representativeLayout;
           this.operatorProfiles = operatorProfiles;
+          this.providerSignature = providerSignature;
           this.documentSetSettings = documentSetSettings;
           this.profileTab = "company";
           await this.$nextTick();
@@ -485,8 +488,42 @@
         this.operatorProfiles.profiles.push({
           profile_id: `operator_${suffix}`,
           name: "",
+          signature_path: "",
+          signature_thumbnail: "",
           service_templates: [],
         });
+      },
+      async chooseCustomerRepresentativeSignature() {
+        const result = await CCCD.bridge.chooseCustomerRepresentativeSignature();
+        if (!result?.ok) return;
+        state.customer.signature_path = result.signature_path;
+        state.customer.signature_thumbnail = result.signature_thumbnail;
+      },
+      async chooseRepresentativeSignature() {
+        const result = await CCCD.bridge.chooseRepresentativeSignature();
+        if (!result?.ok) return;
+        this.representative.signature_path = result.signature_path;
+        this.representative.signature_thumbnail = result.signature_thumbnail;
+        CCCD.pushToast("Đã lưu ảnh chữ ký người đại diện", "success");
+      },
+      async chooseProviderSignature() {
+        const result = await CCCD.bridge.chooseProviderSignature();
+        if (!result?.ok) return;
+        this.providerSignature.signature_path = result.signature_path;
+        this.providerSignature.signature_thumbnail = result.signature_thumbnail;
+        state.provider_signature_path = result.signature_path;
+        CCCD.pushToast("Đã lưu ảnh chữ ký bên cung cấp dịch vụ", "success");
+      },
+      async chooseOperatorSignature(profileId) {
+        const result = await CCCD.bridge.chooseOperatorSignature(profileId);
+        if (!result?.ok) return;
+        const item = this.operatorProfiles.profiles.find(
+          (entry) => entry.profile_id === profileId,
+        );
+        if (item) {
+          item.signature_path = result.signature_path;
+          item.signature_thumbnail = result.signature_thumbnail;
+        }
       },
       removeOperatorProfile(profileId) {
         if (this.operatorProfiles.profiles.length <= 1) {
@@ -514,6 +551,7 @@
         );
         if (selected) {
           state.staff_name = selected.name;
+          state.operator_signature_path = selected.signature_path;
         }
         CCCD.pushToast("Đã lưu giao dịch viên và phân công 5 dịch vụ", "success");
       },
@@ -622,6 +660,13 @@
             <div v-show="state.ui.serviceFormOpen" class="service-tab-panel">
               <sectioned-form v-show="state.ui.activeTab === 'current_owner'"
                 :sections="currentOwnerSections" :root="state" @open-calendar="openCalendar" />
+              <div v-show="state.ui.activeTab === 'current_owner' && state.customer.entity_type === 'Tổ chức'"
+                class="signature-upload">
+                <img v-if="state.customer.signature_thumbnail" class="signature-upload__preview"
+                  :src="state.customer.signature_thumbnail" alt="Chữ ký">
+                <button class="btn" type="button"
+                  @click="chooseCustomerRepresentativeSignature">Chọn ảnh chữ ký đại diện…</button>
+              </div>
               <sectioned-form v-show="state.ui.activeTab === 'new_owner'"
                 :sections="newOwnerSections" :root="state" @open-calendar="openCalendar" />
               <sectioned-form v-show="state.ui.activeTab === 'transaction'"
@@ -639,7 +684,7 @@
         :value="calendarValue" @pick="pickDate" @close="calendar = null" />
 
       <dialog class="modal modal--settings" ref="profileDialog"
-        @close="profile = null; representative = null; operatorProfiles = null; documentSetSettings = null; calendar = null">
+        @close="profile = null; representative = null; operatorProfiles = null; providerSignature = null; documentSetSettings = null; calendar = null">
         <div class="settings-header">
           <div>
             <div class="eyebrow">Cấu hình dùng lại</div>
@@ -651,7 +696,7 @@
         </div>
 
         <div class="settings-layout"
-          v-if="profile && profileLayout && representative && representativeLayout && operatorProfiles && documentSetSettings">
+          v-if="profile && profileLayout && representative && representativeLayout && operatorProfiles && providerSignature && documentSetSettings">
           <nav class="settings-nav" aria-label="Nhóm thiết lập">
             <button v-for="item in profileNavItems" :key="item.id" type="button"
               :data-active="profileTab === item.id" @click="profileTab = item.id">
@@ -680,6 +725,12 @@
               </div>
               <personal-information-form :rows="representativeLayout.primary_rows"
                 :root="representativeRoot" @open-calendar="openCalendar" />
+              <div class="signature-upload">
+                <img v-if="representative.signature_thumbnail" class="signature-upload__preview"
+                  :src="representative.signature_thumbnail" alt="Chữ ký">
+                <button class="btn" type="button"
+                  @click="chooseRepresentativeSignature">Chọn ảnh chữ ký…</button>
+              </div>
             </template>
 
             <template v-else-if="profileTab === 'operators'">
@@ -687,6 +738,14 @@
                 <h3>Giao dịch viên</h3>
                 <p>Mỗi dịch vụ phải được giao cho đúng một người. Dịch vụ đã chọn ở người khác sẽ tự khóa.</p>
               </div>
+              <section class="operator-profile-card operator-profile-card--provider">
+                <div class="operator-profile-card__title">Chữ ký/con dấu bên cung cấp dịch vụ (Võ Duy Nhật)</div>
+                <div class="signature-upload">
+                  <img v-if="providerSignature.signature_thumbnail" class="signature-upload__preview"
+                    :src="providerSignature.signature_thumbnail" alt="Chữ ký">
+                  <button class="btn" type="button" @click="chooseProviderSignature">Chọn ảnh chữ ký…</button>
+                </div>
+              </section>
               <div class="operator-profile-grid">
                 <section v-for="(item, index) in operatorProfiles.profiles"
                   :key="item.profile_id" class="operator-profile-card">
@@ -698,6 +757,12 @@
                   <label class="field__label">Họ tên</label>
                   <input class="field__control" v-model="item.name"
                     placeholder="Nhập họ tên giao dịch viên">
+                  <div class="signature-upload">
+                    <img v-if="item.signature_thumbnail" class="signature-upload__preview"
+                      :src="item.signature_thumbnail" alt="Chữ ký">
+                    <button class="btn" type="button"
+                      @click="chooseOperatorSignature(item.profile_id)">Chọn ảnh chữ ký…</button>
+                  </div>
                   <fieldset class="operator-assignment">
                     <legend>Dịch vụ phụ trách</legend>
                     <label v-for="service in operatorProfiles.services" :key="service.value"

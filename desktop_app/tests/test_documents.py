@@ -319,7 +319,11 @@ class DocumentTest(unittest.TestCase):
             transfer = self.report(DocumentType.TRANSFER)
             output = self.registry.for_data(transfer).generate(transfer, Path(folder))
             text = docx_text(output)
-            self.assertIn("Lê Thị Đại Diện", text)
+            # Bên B's printed full name is plain bold Times New Roman now
+            # (per direct instruction), not the title-cased Great Vibes
+            # script every other signature line uses -- so it stays
+            # all-caps like the rest of the document's plain text.
+            self.assertIn("LÊ THỊ ĐẠI DIỆN", text)
             self.assertIn("Diện", text)  # the "ký tên" given-name line
             self.assertNotIn("VÕ DUY NHẬT", text)
 
@@ -336,16 +340,13 @@ class DocumentTest(unittest.TestCase):
         # floating text boxes -- fragile to edit and impossible to add a
         # signature image into without breaking the layout (see the fixed
         # prepaid_contract equivalent). It's a real table now: row 0 =
-        # heading/hint, row 1 = a fixed-height signature area, row 2 = the
-        # name -- a real table row's height is uniform across every column
-        # by construction, which is what keeps the 3 printed names aligned
-        # regardless of Bên B's column alone carrying a signature image
-        # (previously approximated with manual blank-paragraph padding,
-        # which drifted out of alignment once a real image was added).
-        # Column ORDER isn't asserted here (this table gets hand-edited in
-        # Word from time to time and the shop is free to reorder its own
-        # columns) -- only that each of the 3 "Đại diện Bên X" columns still
-        # carries the right content, wherever it physically sits.
+        # heading/hint, row 1 = ký tên + họ tên stacked as two paragraphs
+        # in the same cell (this table gets hand-edited in Word/LibreOffice
+        # from time to time -- it started as 3 rows and settled at 2, still
+        # keeping every party's own 2 lines together). Column ORDER isn't
+        # asserted either -- the shop is free to reorder its own columns --
+        # only that each of the 3 "Đại diện Bên X" columns still carries
+        # the right content, wherever it physically sits.
         with tempfile.TemporaryDirectory() as folder:
             data = self.report(DocumentType.TRANSFER)
             data.customer.full_name = "NGUYỄN ĐẠI DIỆN BÊN A"
@@ -362,7 +363,7 @@ class DocumentTest(unittest.TestCase):
                 t for t in document.tables
                 if any("Đại diện Bên A" in cell.text.splitlines()[0] for cell in t.rows[0].cells)
             )
-            self.assertEqual(len(signature_table.rows), 3)
+            self.assertEqual(len(signature_table.rows), 2)
             column_count = len(signature_table.rows[0].cells)
             cells_by_party = {
                 signature_table.rows[0].cells[col].text.splitlines()[0]: "\n".join(
@@ -371,13 +372,16 @@ class DocumentTest(unittest.TestCase):
                 for col in range(column_count)
             }
             self.assertEqual(set(cells_by_party), {"Đại diện Bên A", "Đại diện Bên B", "Đại diện Bên C"})
-            # Signature-line names print in the embedded Great Vibes script
-            # font, which is title-cased rather than the all-caps used
-            # everywhere else (see renderer.py::_replace_placeholders) --
-            # a full-caps run through a cursive connecting face reads as
-            # tangled, illegible strokes instead of a real signature.
+            # Bên A/C's signature-line names print in the embedded Great
+            # Vibes script font, which is title-cased rather than the
+            # all-caps used everywhere else (see
+            # renderer.py::_replace_placeholders) -- a full-caps run
+            # through a cursive connecting face reads as tangled,
+            # illegible strokes instead of a real signature. Bên B is
+            # plain bold Times New Roman instead (per direct instruction),
+            # so it keeps the all-caps the rest of the document uses.
             self.assertIn("Nguyễn Đại Diện Bên A", cells_by_party["Đại diện Bên A"])
-            self.assertIn("Lê Thị Đại Diện", cells_by_party["Đại diện Bên B"])
+            self.assertIn("LÊ THỊ ĐẠI DIỆN", cells_by_party["Đại diện Bên B"])
             # Bên C is the new owner's own name (new_owner_signature_name),
             # a variable independent from Bên B's provider_representative --
             # an earlier round briefly had Bên C reuse Bên B's exact
@@ -386,7 +390,7 @@ class DocumentTest(unittest.TestCase):
             # này"). They must stay different fields even when, by
             # coincidence, they'd render the same text.
             self.assertIn("Trần Thị B", cells_by_party["Đại diện Bên C"])
-            self.assertNotIn("Lê Thị Đại Diện", cells_by_party["Đại diện Bên C"])
+            self.assertNotIn("LÊ THỊ ĐẠI DIỆN", cells_by_party["Đại diện Bên C"])
 
     def test_prepaid_contract_signature_table_bien_a_is_not_bien_b(self):
         # Bên A and Bên B used to share one token ({{ provider_representative
@@ -405,19 +409,21 @@ class DocumentTest(unittest.TestCase):
                     for cell in t.rows[0].cells
                 )
             )
-            self.assertEqual(len(signature_table.rows), 3)
+            self.assertEqual(len(signature_table.rows), 2)
             cells_by_party = {
                 signature_table.rows[0].cells[col].text.splitlines()[0]: "\n".join(
                     signature_table.rows[row].cells[col].text for row in range(len(signature_table.rows))
                 )
                 for col in range(len(signature_table.rows[0].cells))
             }
-            # Signature-line names print in the embedded Great Vibes script
-            # font, which is title-cased rather than the all-caps used
-            # everywhere else (see renderer.py::_replace_placeholders).
+            # Bên A's name prints in the embedded Great Vibes script font,
+            # which is title-cased rather than the all-caps used elsewhere
+            # (see renderer.py::_replace_placeholders). Bên B is plain bold
+            # Times New Roman instead (per direct instruction), so it stays
+            # all-caps like the rest of the document.
             self.assertIn("Nguyễn Văn An", cells_by_party["ĐẠI DIỆN BÊN A"])
-            self.assertIn("Lê Thị Đại Diện", cells_by_party["ĐẠI DIỆN BÊN B"])
-            self.assertNotIn("Lê Thị Đại Diện", cells_by_party["ĐẠI DIỆN BÊN A"])
+            self.assertIn("LÊ THỊ ĐẠI DIỆN", cells_by_party["ĐẠI DIỆN BÊN B"])
+            self.assertNotIn("LÊ THỊ ĐẠI DIỆN", cells_by_party["ĐẠI DIỆN BÊN A"])
 
             # The signature row must hold a fixed minimum height even when a
             # column carries no image (Bên A never does) -- otherwise there's
@@ -550,20 +556,20 @@ class DocumentTest(unittest.TestCase):
                 self.assertIsNone(properties.find(qn("w:spacing")))
                 self.assertEqual(properties.find(qn("w:sz")).get(qn("w:val")), "30")
                 self.assertEqual(properties.find(qn("w:szCs")).get(qn("w:val")), "30")
-            # The signature block is a real 3-row table now (was a 3-column
+            # The signature block is a real table now (was a 3-column
             # SECTION with linear paragraph flow -- the same class of
             # fragility already fixed for the other 4 templates' signature
-            # blocks). Row 0 = heading/hint, row 1 = a fixed-height
-            # signature area, row 2 = the printed name -- so the 3 names
+            # blocks). Row 0 = heading/hint, row 1 = ký tên + họ tên
+            # stacked as two paragraphs in the same cell, so the 3 names
             # stay aligned regardless of which column carries an image.
             signature_table = next(
                 t for t in document.tables
                 if any("NGƯỜI YÊU CẦU" in cell.text for cell in t.rows[0].cells)
             )
-            self.assertEqual(len(signature_table.rows), 3)
+            self.assertEqual(len(signature_table.rows), 2)
             headers = [cell.text.splitlines()[0] for cell in signature_table.rows[0].cells]
             self.assertEqual(headers, ["NGƯỜI YÊU CẦU", "CHỦ THUÊ BAO MỚI", "GIAO DỊCH VIÊN"])
-            names = [cell.text for cell in signature_table.rows[2].cells]
+            names = [cell.text for cell in signature_table.rows[1].cells]
             # Printed names in this table sit in the "Great Vibes" cursive
             # signature font, which title-cases them at substitution time
             # (all-caps collides in a script face) -- see renderer.py's

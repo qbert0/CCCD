@@ -146,6 +146,11 @@ class PersonData:
     representative_position: str = ""
     authorization_number: str = ""
     authorization_date: str = ""
+    # Optional real signature image -- currently only meaningful when this
+    # PersonData is the representative_profile session record (see
+    # renderer.py's use of representative.signature_path for
+    # prepaid_representative_name); harmless/unused on customer/new_owner.
+    signature_path: str = ""
 
     def display_name(self) -> str:
         return self.organization_name if self.entity_type == "Tổ chức" else self.full_name
@@ -298,6 +303,15 @@ class ReportData:
     service_point_name: str = ""
     provider_representative: str = ""
     provider_position: str = ""
+    # Optional real signature/stamp images -- when set, these REPLACE the
+    # printed "ký tên"/"họ tên" cursive-text signature entirely (both
+    # lines) for that signer. provider_signature_path is Bên B's own
+    # fixed identity (see DEFAULT_PROVIDER_REPRESENTATIVE_NAME), not tied
+    # to any profile. operator_signature_path is shared by every
+    # "giao dịch viên"/clerk signature slot (aftersale, sim_change_form) --
+    # sourced from the assigned OperatorProfile's own signature_path.
+    provider_signature_path: str = ""
+    operator_signature_path: str = ""
     # The representative's own contact details -- Prepaid Contract only,
     # auto-filled from the representative session (the only record that
     # actually carries a phone/email for this person; company_profile's own

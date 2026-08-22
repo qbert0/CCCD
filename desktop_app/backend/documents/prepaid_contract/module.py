@@ -27,7 +27,8 @@ class PrepaidContractDocumentModule(BaseDocumentModule):
         "prepaid_individual_address", "prepaid_individual_phone", "prepaid_individual_email",
         "prepaid_individual_other_contact", "prepaid_individual_nationality", "shop_address",
         "prepaid_party_a_signature_name", "prepaid_party_a_signature_given_name",
-        "provider_representative", "provider_representative_given_name",
+        "provider_representative", "provider_representative_signature",
+        "provider_representative_signature_given_name",
         "provider_position", "service_point_name", "staff_name",
         "shop_phone", "registration_time", "subscriber_number", "sim_serial", "activation_date",
     })

@@ -13,6 +13,7 @@ class OperatorProfile:
 
     profile_id: str = ""
     name: str = ""
+    signature_path: str = ""
     service_templates: list[str] = field(default_factory=list)
 
 
@@ -54,6 +55,7 @@ def load_operator_profiles(settings: Any) -> list[OperatorProfile]:
             OperatorProfile(
                 profile_id=str(item.get("profile_id", "") or "").strip(),
                 name=str(item.get("name", "") or "").strip(),
+                signature_path=str(item.get("signature_path", "") or "").strip(),
                 service_templates=[str(value) for value in item.get("service_templates", [])],
             )
             for item in items

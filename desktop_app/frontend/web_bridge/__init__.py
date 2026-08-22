@@ -93,10 +93,29 @@ ORGANIZATION_DOCUMENTS = {
 # frequently signed by shop staff on the new owner's behalf, so it reuses
 # this exact same variable+default rather than a separate one.
 DEFAULT_PROVIDER_REPRESENTATIVE_NAME = "VÕ DUY NHẬT"
+# Bên B's own signature/stamp image -- one shop-wide setting (see
+# choose_provider_signature/get_provider_signature), independent of any
+# profile, mirroring DEFAULT_PROVIDER_REPRESENTATIVE_NAME's fixed-identity
+# reasoning above.
+PROVIDER_SIGNATURE_SETTINGS_KEY = "provider_signature_path"
 # Starting value for Prepaid Contract's "Điểm cung cấp dịch vụ viễn thông" --
 # like service_point_address/service_point_phone below, a per-case editable
 # default (falls back only when the field is still empty), not a fixed value.
 DEFAULT_SERVICE_POINT_NAME = "TD Vietnamobile"
+
+
+def _store_signature_image(source: Path, slug: str) -> Path:
+    """Copy a user-picked signature image into durable app-data storage
+    (not left pointing at wherever the original file happens to live --
+    that path can move or disappear) under a stable, per-signer name so a
+    later upload for the same signer cleanly replaces the previous file."""
+    signatures_dir = Path(
+        QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
+    ) / "signatures"
+    signatures_dir.mkdir(parents=True, exist_ok=True)
+    destination = signatures_dir / f"{slug}{source.suffix.casefold()}"
+    shutil.copy2(source, destination)
+    return destination
 
 
 def _needs_new_owner(document_type: DocumentType, service_action: str) -> bool:
@@ -178,6 +197,13 @@ class WebBridge(QObject):
                 ):
                     setattr(customer, name, getattr(representative, name))
                 customer.representative_name = representative.full_name
+                # Bên A's signature cell prints THIS SAME person (Đại diện
+                # Bên A = representative_profile, per the copy above), so
+                # its image travels with the identity copy -- only here,
+                # not for Aftersale/Prepaid, whose customer objects never
+                # take on the representative's identity and would show the
+                # wrong person's signature under the right person's name.
+                customer.signature_path = representative.signature_path
             patch["customer"] = asdict(customer)
 
         if document_type == DocumentType.PREPAID_CONTRACT:
@@ -702,6 +728,13 @@ class WebBridge(QObject):
         # document type whose defaults previously carried this value.
         provider_defaults = self._profile_defaults_patch(DocumentType.AFTERSALE)
         state_patch["provider_representative"] = provider_defaults["provider_representative"]
+        # Bên B's own signature/stamp image -- a single shop-wide setting
+        # (see choose_provider_signature/get_provider_signature below),
+        # unrelated to any profile, matching provider_representative's own
+        # fixed-identity status (see round 12's lesson in memory: this
+        # role is Vietnamobile's own signer, not whichever "Người đại
+        # diện" profile happens to be configured).
+        state_patch["provider_signature_path"] = str(self.settings.value(PROVIDER_SIGNATURE_SETTINGS_KEY, "") or "")
 
         # The common dossier is positional and is therefore the sole OCR
         # authority across service changes. Never derive a new service from
@@ -741,6 +774,7 @@ class WebBridge(QObject):
         state_patch["payment_method"] = SERVICE_TEMPLATE_PAYMENT_METHOD[template]
         operator = operator_for_service(self.operator_profiles, template)
         state_patch["staff_name"] = operator.name
+        state_patch["operator_signature_path"] = operator.signature_path
 
         if DocumentType.PREPAID_CONTRACT in document_types:
             prepaid_patch = self._profile_defaults_patch(DocumentType.PREPAID_CONTRACT)
@@ -977,12 +1011,37 @@ class WebBridge(QObject):
             "profiles": [{
                 "profile_id": profile.profile_id,
                 "name": profile.name,
+                "signature_path": profile.signature_path,
+                "signature_thumbnail": (
+                    thumbnail_data_url(Path(profile.signature_path))
+                    if profile.signature_path and Path(profile.signature_path).is_file()
+                    else ""
+                ),
                 "service_templates": profile.service_templates,
             } for profile in self.operator_profiles],
             "services": [
                 {"value": template.value, "label": SERVICE_TEMPLATE_NAMES[template]}
                 for template in ServiceTemplate
             ],
+        })
+
+    @pyqtSlot(str, result=str)
+    def choose_operator_signature(self, profile_id: str) -> str:
+        """Native file picker for one clerk's own signature image -- copied
+        into durable app-data storage (not left pointing at wherever the
+        user's original file happens to live) and returned so the caller
+        can stash it on that profile's own entry before saving."""
+        path, _ = QFileDialog.getOpenFileName(
+            self.window, "Chọn ảnh chữ ký giao dịch viên", str(Path.home()),
+            "Ảnh (*.png *.jpg *.jpeg)",
+        )
+        if not path:
+            return json.dumps({"ok": False})
+        stored = _store_signature_image(Path(path), profile_id)
+        return json.dumps({
+            "ok": True,
+            "signature_path": str(stored),
+            "signature_thumbnail": thumbnail_data_url(stored),
         })
 
     @pyqtSlot(str, result=str)
@@ -998,6 +1057,7 @@ class WebBridge(QObject):
         for index, item in enumerate(raw, start=1):
             profile_id = str((item or {}).get("profile_id", "") or "").strip()
             name = str((item or {}).get("name", "") or "").strip()
+            signature_path = str((item or {}).get("signature_path", "") or "").strip()
             services = [str(value) for value in (item or {}).get("service_templates", [])]
             if not re.fullmatch(r"operator_[A-Za-z0-9_-]{1,80}", profile_id) or profile_id in seen_ids:
                 return json.dumps({"ok": False, "message": f"Giao dịch viên {index} có mã không hợp lệ"})
@@ -1013,7 +1073,10 @@ class WebBridge(QObject):
                     })
                 assigned[service] = profile_id
             seen_ids.add(profile_id)
-            profiles.append(OperatorProfile(profile_id, name, services))
+            profiles.append(OperatorProfile(
+                profile_id=profile_id, name=name, signature_path=signature_path,
+                service_templates=services,
+            ))
 
         missing = valid_services - set(assigned)
         if missing:
@@ -1024,6 +1087,39 @@ class WebBridge(QObject):
         save_operator_profiles_storage(self.settings, profiles)
         self.operator_profiles = profiles
         return json.dumps({"ok": True})
+
+    # ------------------------------------------------------------------
+    # Bên B / "Đại diện bên cung cấp dịch vụ" own signature image -- one
+    # shop-wide setting, independent of any profile (see
+    # PROVIDER_SIGNATURE_SETTINGS_KEY above).
+    # ------------------------------------------------------------------
+
+    @pyqtSlot(result=str)
+    def get_provider_signature(self) -> str:
+        path = str(self.settings.value(PROVIDER_SIGNATURE_SETTINGS_KEY, "") or "")
+        return json.dumps({
+            "signature_path": path,
+            "signature_thumbnail": (
+                thumbnail_data_url(Path(path)) if path and Path(path).is_file() else ""
+            ),
+        })
+
+    @pyqtSlot(result=str)
+    def choose_provider_signature(self) -> str:
+        path, _ = QFileDialog.getOpenFileName(
+            self.window, "Chọn ảnh chữ ký/con dấu bên cung cấp dịch vụ", str(Path.home()),
+            "Ảnh (*.png *.jpg *.jpeg)",
+        )
+        if not path:
+            return json.dumps({"ok": False})
+        stored = _store_signature_image(Path(path), "provider")
+        self.settings.setValue(PROVIDER_SIGNATURE_SETTINGS_KEY, str(stored))
+        self.settings.sync()
+        return json.dumps({
+            "ok": True,
+            "signature_path": str(stored),
+            "signature_thumbnail": thumbnail_data_url(stored),
+        })
 
     # ------------------------------------------------------------------
     # Which documents each service generates -- a safety net for a wrong
@@ -1097,7 +1193,14 @@ class WebBridge(QObject):
 
     @pyqtSlot(result=str)
     def get_representative_profile(self) -> str:
-        return json.dumps(asdict(self.representative_profile))
+        payload = asdict(self.representative_profile)
+        signature_path = self.representative_profile.signature_path
+        payload["signature_thumbnail"] = (
+            thumbnail_data_url(Path(signature_path))
+            if signature_path and Path(signature_path).is_file()
+            else ""
+        )
+        return json.dumps(payload)
 
     @pyqtSlot(str, result=str)
     def save_representative_profile(self, person_json: str) -> str:
@@ -1119,6 +1222,47 @@ class WebBridge(QObject):
         save_representative_profile_storage(self.settings, person)
         self.representative_profile = person
         return json.dumps({"ok": True, "errors": []})
+
+    @pyqtSlot(result=str)
+    def choose_customer_representative_signature(self) -> str:
+        """The old owner's own org representative's signature -- unlike
+        choose_representative_signature (a persistent Settings profile),
+        this is genuinely per-case (a different real organization/signer
+        every time) so it's just copied and returned, never saved to
+        QSettings; the caller stashes it directly on state.customer."""
+        path, _ = QFileDialog.getOpenFileName(
+            self.window, "Chọn ảnh chữ ký đại diện bên khách hàng", str(Path.home()),
+            "Ảnh (*.png *.jpg *.jpeg)",
+        )
+        if not path:
+            return json.dumps({"ok": False})
+        stored = _store_signature_image(Path(path), "customer_representative")
+        return json.dumps({
+            "ok": True,
+            "signature_path": str(stored),
+            "signature_thumbnail": thumbnail_data_url(stored),
+        })
+
+    @pyqtSlot(result=str)
+    def choose_representative_signature(self) -> str:
+        """Người đại diện's own signature image -- currently only printed
+        via prepaid_representative_name (see renderer.py), replacing that
+        one inline mention rather than a dedicated 2-line signature block
+        (this role has never had one)."""
+        path, _ = QFileDialog.getOpenFileName(
+            self.window, "Chọn ảnh chữ ký người đại diện", str(Path.home()),
+            "Ảnh (*.png *.jpg *.jpeg)",
+        )
+        if not path:
+            return json.dumps({"ok": False})
+        stored = _store_signature_image(Path(path), "representative")
+        self.representative_profile.signature_path = str(stored)
+        save_representative_profile_storage(self.settings, self.representative_profile)
+        return json.dumps({
+            "ok": True,
+            "signature_path": str(stored),
+            "signature_thumbnail": thumbnail_data_url(stored),
+        })
 
     @pyqtSlot(str, result=str)
     def save_company_profile(self, person_json: str) -> str:
