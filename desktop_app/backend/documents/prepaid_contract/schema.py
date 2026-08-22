@@ -2,6 +2,7 @@ from desktop_app.backend.domain.models import ReportData
 from desktop_app.backend.validation.rules import (
     FieldError,
     common_errors,
+    duplicate_subscriber_errors,
     organization_information_required,
     party_required,
     personal_information_required,
@@ -19,16 +20,14 @@ class PrepaidContractSchema:
             return [
                 *organization_information_required("customer"),
                 *personal_information_required("representative"),
-                "representative.representative_position", "representative.phone",
-                *personal_information_required("new_owner"), "new_owner.phone",
+                "representative.representative_position",
+                *personal_information_required("new_owner"),
                 "provider_unit_address", "provider_representative",
-                "service_point_name", "staff_name", "service_point_address",
-                "service_point_phone", "registration_time",
+                "staff_name", "service_point_address", "service_point_phone",
             ]
         paths = [
             "document_date", "subscriber_number", *party_required("customer", data.customer),
-            "customer.phone", "service_point_name", "staff_name", "shop_address", "shop_phone",
-            "registration_time", "sim_serial", "activation_date",
+            "staff_name", "shop_address", "shop_phone", "activation_date",
         ]
         if data.customer.entity_type == "Tổ chức":
             paths += [
@@ -65,21 +64,26 @@ class PrepaidContractSchema:
             rows = data.prepaid_subscribers[:5] or [
                 {"subscriber_number": "", "sim_serial": "", "activation_date": ""}
             ]
-            labels = {
-                "subscriber_number": "Số thuê bao",
-                "sim_serial": "Số sê-ri SIM",
-                "activation_date": "Ngày hòa mạng",
-            }
+            # sim_serial has no natural default and isn't identity or a
+            # phone number -- by explicit request, only phone/subscriber
+            # numbers (plus real identity) stay hard-required; a missing
+            # SIM serial prints as a blank line instead of blocking
+            # generation, same as every other optional field already does.
+            required_names = {"subscriber_number": "Số thuê bao", "activation_date": "Ngày hòa mạng"}
             for index, row in enumerate(rows):
-                for name, label in labels.items():
+                for name, label in required_names.items():
                     value = str(row.get(name, "") or "").strip()
                     path = f"prepaid_subscribers.{index}.{name}"
                     if not value:
                         errors.append(FieldError(path, f"{label} là thông tin bắt buộc"))
-                    elif name == "subscriber_number" and not valid_phone(value):
-                        errors.append(FieldError(path, "Số điện thoại phải gồm từ 9 đến 12 chữ số"))
                     elif name == "activation_date" and not valid_date(value):
                         errors.append(FieldError(path, "Ngày phải đúng định dạng DD/MM/YYYY"))
+                number = str(row.get("subscriber_number", "") or "").strip()
+                if number and not valid_phone(number):
+                    errors.append(FieldError(
+                        f"prepaid_subscribers.{index}.subscriber_number", "Số điện thoại phải gồm từ 9 đến 12 chữ số"
+                    ))
+            errors += duplicate_subscriber_errors(rows, "prepaid_subscribers")
             return errors
 
         errors = required_errors(data, cls.required_paths(data))

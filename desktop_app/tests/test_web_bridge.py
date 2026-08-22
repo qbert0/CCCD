@@ -1,6 +1,8 @@
 import json
 import os
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -14,6 +16,7 @@ from desktop_app.frontend.web_bridge.schema import (
     resolve_document_tab_layout,
     resolve_representative_profile_layout,
 )
+from desktop_app.backend.validation import FieldError
 
 
 class _FakeWindow:
@@ -47,6 +50,74 @@ class WebBridgeTest(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertEqual(json.loads(self.bridge.get_representative_profile())["full_name"], "LE THI DAI DIEN")
 
+    def test_dynamic_clerks_cover_five_services_without_overlap(self):
+        profiles = [
+            {
+                "profile_id": "operator_1",
+                "name": "NGUYỄN GIAO DỊCH",
+                "service_templates": [
+                    "prepaid_transfer_org", "prepaid_transfer_individual",
+                    "commitment_transfer_individual", "commitment_transfer_org",
+                ],
+            },
+            {
+                "profile_id": "operator_2",
+                "name": "TRẦN THAY SIM",
+                "service_templates": ["sim_replacement"],
+            },
+        ]
+        result = json.loads(self.bridge.save_operator_profiles(json.dumps(profiles)))
+        self.assertTrue(result["ok"], result)
+        payload = json.loads(self.bridge.get_operator_profiles())
+        self.assertEqual(len(payload["profiles"]), 2)
+        self.assertEqual(len(payload["services"]), 5)
+
+        duplicate = [dict(item) for item in profiles]
+        duplicate[1] = {
+            **duplicate[1],
+            "service_templates": ["sim_replacement", "prepaid_transfer_org"],
+        }
+        rejected = json.loads(self.bridge.save_operator_profiles(json.dumps(duplicate)))
+        self.assertFalse(rejected["ok"])
+        self.assertIn("chỉ được giao cho một người", rejected["message"])
+
+    def test_document_set_settings_default_to_all_documents_and_can_be_overridden(self):
+        from desktop_app.backend.domain.models import ServiceTemplate
+
+        default = json.loads(self.bridge.get_document_set_settings())
+        self.assertEqual(len(default["services"]), 5)
+        self.assertEqual(len(default["documents"]), 5)
+        self.assertEqual(
+            set(default["selected"][ServiceTemplate.SIM_REPLACEMENT.value]),
+            {"aftersale", "sim_change_form"},
+        )
+
+        selected = default["selected"]
+        selected[ServiceTemplate.PREPAID_TRANSFER_ORG.value] = ["transfer", "aftersale"]
+        saved = json.loads(self.bridge.save_document_set_settings(json.dumps(selected)))
+        self.assertTrue(saved["ok"], saved)
+
+        reloaded = json.loads(self.bridge.get_document_set_settings())
+        self.assertEqual(
+            reloaded["selected"][ServiceTemplate.PREPAID_TRANSFER_ORG.value],
+            ["transfer", "aftersale"],
+        )
+        # on_service_template_changed must reflect the override immediately.
+        response = json.loads(self.bridge.on_service_template_changed(json.dumps({
+            "previous_service_template": "", "new_service_template": ServiceTemplate.PREPAID_TRANSFER_ORG.value,
+            "state": json.loads(self.bridge.get_initial_state())["state"],
+        })))
+        self.assertEqual(response["ui"]["documentCount"], 2)
+
+    def test_document_set_settings_reject_a_service_with_zero_documents(self):
+        from desktop_app.backend.domain.models import ServiceTemplate
+
+        selected = json.loads(self.bridge.get_document_set_settings())["selected"]
+        selected[ServiceTemplate.SIM_REPLACEMENT.value] = []
+        rejected = json.loads(self.bridge.save_document_set_settings(json.dumps(selected)))
+        self.assertFalse(rejected["ok"])
+        self.assertIn("cần chọn ít nhất một tài liệu", rejected["message"])
+
     def test_company_and_shop_identity_fields_auto_fill_from_profiles(self):
         self.bridge.company_profile = PersonData(
             entity_type="Tổ chức", organization_name="CÔNG TY ABC",
@@ -68,7 +139,14 @@ class WebBridgeTest(unittest.TestCase):
             "state": {**defaults, "document_type": "aftersale"},
         }
         response = json.loads(self.bridge.on_document_type_changed(json.dumps(request)))
-        self.assertEqual(response["state_patch"]["provider_representative"], "LÊ THỊ ĐẠI DIỆN")
+        # provider_representative (Bên B / "Đại diện bên cung cấp dịch vụ")
+        # is Vietnamobile's own fixed signing identity -- always Võ Duy
+        # Nhật, regardless of whatever is filled into "Người đại diện"
+        # (representative_profile feeds a DIFFERENT role: the org-party
+        # representative for TRANSFER's old owner, etc.). A real user report
+        # ("tôi đã bảo provider_representative là Võ Duy Nhật rồi mà") caught
+        # this defaulting to the representative profile's own name instead.
+        self.assertEqual(response["state_patch"]["provider_representative"], "VÕ DUY NHẬT")
 
         reset = json.loads(self.bridge.apply_profile_defaults("transfer"))
         self.assertEqual(reset["customer"]["organization_name"], "CÔNG TY ABC")
@@ -126,6 +204,8 @@ class WebBridgeTest(unittest.TestCase):
         ]
         position = next(field for field in representative_fields if field["name"] == "representative_position")
         self.assertEqual(position["options"], ["Giám đốc", "Nhân viên"])
+        representative_phone = next(field for field in representative_fields if field["name"] == "phone")
+        self.assertFalse(representative_phone["required"])
         self.assertTrue({"phone", "email", "other_contact"}.issubset(
             {field["name"] for field in representative_fields}
         ))
@@ -134,7 +214,24 @@ class WebBridgeTest(unittest.TestCase):
             for row in response["layouts"]["new_owner"]["primary_rows"] for cell in row
         }
         self.assertTrue({"phone", "email", "other_contact"}.issubset(customer_names))
+        customer_fields = [
+            cell["field"]
+            for row in response["layouts"]["new_owner"]["primary_rows"]
+            for cell in row
+        ]
+        customer_phone = next(field for field in customer_fields if field["name"] == "phone")
+        self.assertFalse(customer_phone["required"])
         self.assertEqual(len(response["layouts"]["document"]["sections"]), 2)
+        provider_fields = [
+            cell["field"]
+            for section in response["layouts"]["document"]["sections"]
+            for row in section["rows"]
+            for cell in row
+        ]
+        service_point = next(field for field in provider_fields if field["name"] == "service_point_name")
+        registration_time = next(field for field in provider_fields if field["name"] == "registration_time")
+        self.assertFalse(service_point["required"])
+        self.assertFalse(registration_time["required"])
         self.assertEqual(response["layouts"]["sims"]["max_rows"], 5)
 
     def test_company_profile_layout_keeps_only_company_information(self):
@@ -323,6 +420,354 @@ class WebBridgeTest(unittest.TestCase):
         rows = response["state_patch"]["beautiful_subscribers"]
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["subscriber_number"], "0925123456")
+
+    def test_get_service_templates_lists_all_five_mau(self):
+        templates = json.loads(self.bridge.get_service_templates())
+        self.assertEqual(len(templates), 5)
+        self.assertEqual({t["value"] for t in templates}, {
+            "prepaid_transfer_org", "prepaid_transfer_individual",
+            "commitment_transfer_individual", "commitment_transfer_org", "sim_replacement",
+        })
+
+    def test_on_service_template_changed_sets_entity_types_and_document_set(self):
+        defaults = self.bridge._default_report_dict()
+        cases = [
+            ("prepaid_transfer_org", 4, "Tổ chức"),
+            ("prepaid_transfer_individual", 4, "Cá nhân"),
+            ("commitment_transfer_individual", 4, "Cá nhân"),
+            ("commitment_transfer_org", 4, "Tổ chức"),
+            ("sim_replacement", 2, "Cá nhân"),
+        ]
+        for value, expected_count, expected_entity in cases:
+            with self.subTest(template=value):
+                response = json.loads(self.bridge.on_service_template_changed(json.dumps({
+                    "previous_service_template": "", "new_service_template": value,
+                    "state": {**defaults, "document_type": ""},
+                })))
+                self.assertTrue(response["ui"]["ready"])
+                self.assertEqual(response["ui"]["documentCount"], expected_count)
+                self.assertEqual(response["state_patch"]["customer"]["entity_type"], expected_entity)
+                self.assertEqual(response["state_patch"]["new_owner"]["entity_type"], "Cá nhân")
+                self.assertNotIn("layouts", response)
+                self.assertNotIn("advanced_layouts", response)
+                self.assertNotIn("documentTypes", response["ui"])
+                self.assertEqual(
+                    [tab["id"] for tab in response["service_layout"]["tabs"]],
+                    ["current_owner", "new_owner", "provider", "transaction"],
+                )
+        service_actions = {
+            "prepaid_transfer_org": "Chuyển chủ quyền", "sim_replacement": "Thay SIM",
+        }
+        for value, action in service_actions.items():
+            response = json.loads(self.bridge.on_service_template_changed(json.dumps({
+                "previous_service_template": "", "new_service_template": value,
+                "state": {**defaults, "document_type": ""},
+            })))
+            self.assertEqual(response["state_patch"]["service_action"], action)
+
+    def test_sim_replacement_customer_tab_has_no_phone_email_gender_inputs(self):
+        # sim_change_form's own template prints {{sim_customer_phone}}/
+        # {{sim_customer_email}}/{{sim_customer_gender}} for this party, but
+        # per direct instruction: phone is the SHOP's own number (auto-
+        # defaulted from the company profile, not typed per case -- see
+        # renderer.py's sim_customer_phone), and email/gender simply aren't
+        # needed at all. None of the 3 get a manual UI input.
+        defaults = self.bridge._default_report_dict()
+        response = json.loads(self.bridge.on_service_template_changed(json.dumps({
+            "previous_service_template": "", "new_service_template": "sim_replacement",
+            "state": {**defaults, "document_type": ""},
+        })))
+        paths = {
+            cell["field"]["path"]
+            for section in response["service_layout"]["current_owner"]["sections"]
+            for row in section["rows"]
+            for cell in row
+        }
+        self.assertNotIn("customer.phone", paths)
+        self.assertNotIn("customer.email", paths)
+        self.assertNotIn("customer.gender", paths)
+
+    def test_common_dossier_is_the_identity_source_across_service_switches(self):
+        defaults = self.bridge._default_report_dict()
+        common = {
+            "revision": 7,
+            "person123": {
+                "entity_type": "Cá nhân", "full_name": "NGƯỜI TRONG ẢNH 1-3",
+                "id_number": "001099999991", "nationality": "Việt Nam",
+            },
+            "person456": {
+                "entity_type": "Cá nhân", "full_name": "NGƯỜI TRONG ẢNH 4-6",
+                "id_number": "001099999992", "nationality": "Việt Nam",
+            },
+        }
+
+        def switch(service: str, contaminated_state: dict | None = None):
+            return json.loads(self.bridge.on_service_template_changed(json.dumps({
+                "previous_service_template": "",
+                "new_service_template": service,
+                "state": contaminated_state or {**defaults, "document_type": ""},
+                "common_dossier": common,
+            })))["state_patch"]
+
+        individual = switch("prepaid_transfer_individual")
+        self.assertEqual(individual["customer"]["full_name"], "NGƯỜI TRONG ẢNH 1-3")
+        self.assertEqual(individual["new_owner"]["full_name"], "NGƯỜI TRONG ẢNH 4-6")
+
+        # In an organization service the exact same 1-3 slot changes role
+        # to new owner; it must never be copied into the organization.
+        organization = switch("prepaid_transfer_org", {
+            **defaults,
+            "document_type": "transfer",
+            "customer": {"full_name": "DỮ LIỆU NGỮ NGHĨA CŨ BỊ NHIỄM"},
+            "new_owner": {"full_name": "DỮ LIỆU NGỮ NGHĨA CŨ BỊ NHIỄM"},
+        })
+        self.assertEqual(organization["new_owner"]["full_name"], "NGƯỜI TRONG ẢNH 1-3")
+        self.assertNotEqual(organization["customer"].get("full_name"), "NGƯỜI TRONG ẢNH 1-3")
+
+        sim = switch("sim_replacement")
+        self.assertEqual(sim["customer"]["full_name"], "NGƯỜI TRONG ẢNH 1-3")
+        self.assertNotIn("full_name", sim["new_owner"])
+
+    def test_common_ocr_batches_can_run_in_parallel_but_legacy_scan_still_reports_busy(self):
+        with (
+            patch.object(self.bridge, "_ocr_busy", return_value=True),
+            patch.object(self.bridge, "_start_ocr", return_value=True) as start,
+        ):
+            common = json.loads(self.bridge.submit_folder_images(
+                "common_456:9", json.dumps(["4.jpg", "5.jpg"]),
+            ))
+            legacy = json.loads(self.bridge.submit_folder_images(
+                "customer", json.dumps(["1.jpg", "2.jpg"]),
+            ))
+        self.assertTrue(common["started"])
+        start.assert_called_once()
+        self.assertFalse(legacy["started"])
+        self.assertIn("đang hoàn tất", legacy["message"])
+
+    def test_service_form_controls_tabs_and_one_subscriber_table(self):
+        defaults = self.bridge._default_report_dict()
+        initial = json.loads(self.bridge.get_initial_state())
+        subscriber_layout = initial["subscriber_layout"]
+        self.assertEqual(
+            [column["name"] for column in subscriber_layout["columns"]],
+            [
+                "subscriber_number", "commitment_months", "monthly_fee",
+                "sim_serial", "activation_date",
+            ],
+        )
+        self.assertEqual(subscriber_layout["max_rows"], 5)
+
+        def layout_for(service):
+            return json.loads(self.bridge.on_service_template_changed(json.dumps({
+                "previous_service_template": "", "new_service_template": service,
+                "state": {**defaults, "document_type": ""},
+            })))["service_layout"]
+
+        prepaid = layout_for("prepaid_transfer_org")
+        self.assertNotIn("subscribers", prepaid)
+        self.assertEqual(
+            [tab["label"] for tab in prepaid["tabs"] if tab["visible"]],
+            ["Tổ chức", "Chủ mới", "Đơn vị thực hiện"],
+        )
+        self.assertTrue(next(tab for tab in prepaid["tabs"] if tab["id"] == "provider")["visible"])
+
+        commitment = layout_for("commitment_transfer_individual")
+        self.assertEqual(
+            [tab["label"] for tab in commitment["tabs"] if tab["visible"]],
+            ["Chủ cũ", "Chủ mới", "Đơn vị thực hiện"],
+        )
+
+        sim = layout_for("sim_replacement")
+        self.assertEqual(
+            [tab["label"] for tab in sim["tabs"] if tab["visible"]],
+            ["Người yêu cầu", "Giao dịch"],
+        )
+        self.assertFalse(next(tab for tab in sim["tabs"] if tab["id"] == "new_owner")["visible"])
+
+    def test_service_source_roles_match_the_correct_numbered_images(self):
+        templates = {item["value"]: item for item in json.loads(self.bridge.get_service_templates())}
+        for service in ("prepaid_transfer_org", "commitment_transfer_org"):
+            self.assertEqual(templates[service]["source_role"], "new_owner_123")
+            self.assertEqual(templates[service]["required_images"], [1, 2, 3])
+        for service in ("prepaid_transfer_individual", "commitment_transfer_individual"):
+            self.assertEqual(templates[service]["source_role"], "old_123_new_456")
+            self.assertEqual(templates[service]["required_images"], [1, 2, 3, 4, 5, 6])
+        self.assertEqual(templates["sim_replacement"]["source_role"], "requester_123")
+
+    def test_service_generation_maps_internal_subscriber_errors_to_the_fixed_form(self):
+        import tempfile
+
+        defaults = self.bridge._default_report_dict()
+        response = json.loads(self.bridge.on_service_template_changed(json.dumps({
+            "previous_service_template": "",
+            "new_service_template": "commitment_transfer_individual",
+            "state": {**defaults, "document_type": ""},
+        })))
+        state = {**defaults, **response["state_patch"]}
+        with tempfile.TemporaryDirectory() as folder, patch(
+            "desktop_app.frontend.web_bridge.generate_service_template",
+            return_value=([], [
+                FieldError("beautiful_subscribers.0.monthly_fee", "Cước không hợp lệ"),
+                FieldError("subscriber_number", "Thiếu số thuê bao"),
+            ]),
+        ):
+            for number in range(1, 7):
+                Path(folder, f"{number}.jpg").write_bytes(b"source")
+            self.bridge._last_source_dir = folder
+            result = json.loads(self.bridge.generate_service_template_documents(
+                "commitment_transfer_individual", json.dumps(state), folder,
+            ))
+        self.assertEqual(
+            [error["path"] for error in result["errors"]],
+            ["subscribers.0.monthly_fee", "subscribers.0.subscriber_number"],
+        )
+
+    def test_individual_service_preserves_scanned_old_owner_and_separates_provider_company(self):
+        self.bridge.company_profile = PersonData(
+            entity_type="Tổ chức", organization_name="CÔNG TY CUNG CẤP",
+            business_registration_number="0101234567",
+            business_registration_issue_date="01/01/2020",
+            business_registration_issue_place="Sở Tài chính Hà Nội",
+            headquarters_address="1 Xã Đàn",
+        )
+        defaults = self.bridge._default_report_dict()
+        scanned = PersonData(
+            full_name="CHỦ CŨ CÁ NHÂN", id_number="001099999999",
+            issue_date="01/01/2021", issue_place="Cục Cảnh sát",
+            date_of_birth="01/01/1990", nationality="Việt Nam", address="Hà Nội",
+        )
+        state = {**defaults, "document_type": "", "customer": scanned.__dict__}
+        response = json.loads(self.bridge.on_service_template_changed(json.dumps({
+            "previous_service_template": "", "new_service_template": "prepaid_transfer_individual",
+            "state": state,
+        })))
+        self.assertEqual(response["state_patch"]["customer"]["full_name"], "CHỦ CŨ CÁ NHÂN")
+        self.assertEqual(response["state_patch"]["customer"]["id_number"], "001099999999")
+        self.assertEqual(
+            response["state_patch"]["provider_company"]["organization_name"],
+            "CÔNG TY CUNG CẤP",
+        )
+
+    def test_organization_service_never_treats_images_123_as_its_representative(self):
+        self.bridge.company_profile = PersonData(
+            entity_type="Tổ chức", organization_name="CÔNG TY CHỦ CŨ",
+            business_registration_number="0101234567",
+            business_registration_issue_date="01/01/2020",
+            business_registration_issue_place="Sở Tài chính Hà Nội",
+            headquarters_address="1 Xã Đàn",
+        )
+        self.bridge.representative_profile = PersonData(
+            full_name="NGƯỜI ĐẠI DIỆN MẶC ĐỊNH", id_number="001090001234",
+            issue_date="01/01/2022", issue_place="Cục Cảnh sát",
+            date_of_birth="01/01/1990", nationality="Việt Nam", address="Hà Nội",
+        )
+        defaults = self.bridge._default_report_dict()
+        image_123_person = PersonData(
+            full_name="CHỦ MỚI TRONG ẢNH", id_number="001099999999",
+            issue_date="01/01/2021", issue_place="Cục Cảnh sát",
+            date_of_birth="01/01/1999", nationality="Việt Nam", address="Hà Nội",
+        )
+        response = json.loads(self.bridge.on_service_template_changed(json.dumps({
+            "previous_service_template": "",
+            "new_service_template": "prepaid_transfer_org",
+            "state": {**defaults, "customer": image_123_person.__dict__},
+        })))
+        customer = response["state_patch"]["customer"]
+        self.assertEqual(customer["organization_name"], "CÔNG TY CHỦ CŨ")
+        self.assertEqual(customer["full_name"], "NGƯỜI ĐẠI DIỆN MẶC ĐỊNH")
+        self.assertNotEqual(customer["id_number"], image_123_person.id_number)
+
+    def test_default_output_dir_persists_and_falls_back(self):
+        fallback = json.loads(self.bridge.get_default_output_dir())
+        self.assertTrue(fallback)
+        self.bridge.set_default_output_dir("/tmp/cccd_custom_output")
+        self.assertEqual(json.loads(self.bridge.get_default_output_dir()), "/tmp/cccd_custom_output")
+
+    def test_generate_service_template_documents_writes_the_right_count_and_fails_atomically(self):
+        import tempfile
+
+        defaults = self.bridge._default_report_dict()
+        response = json.loads(self.bridge.on_service_template_changed(json.dumps({
+            "previous_service_template": "", "new_service_template": "sim_replacement",
+            "state": {**defaults, "document_type": ""},
+        })))
+        state = {**defaults, **response["state_patch"]}
+        state["customer"] = {
+            **state["customer"], "full_name": "NGUYỄN VĂN AN", "id_number": "001099999999",
+            "issue_date": "01/01/2021", "issue_place": "Cục Cảnh sát QLHC về TTXH",
+            "address": "1 Xã Đàn, Hà Nội",
+        }
+        state["subscribers"] = [{"subscriber_number": "0925123456", "monthly_fee": "", "activation_date": "19/08/2026", "sim_serial": "8984041234567890001", "commitment_note": ""}]
+        state["backup_phone_1"] = "0901234567"
+        state["shop_id_number"] = "0101234567"
+        state["shop_issue_date"] = "01/01/2020"
+        state["shop_issue_place"] = "Sở Tài chính Hà Nội"
+        state["provider_representative"] = "LÊ THỊ ĐẠI DIỆN"
+
+        def fake_convert(docx_paths, output_dir, dpi=150, filename_for=None):
+            del dpi
+            output_dir.mkdir(parents=True, exist_ok=True)
+            outputs = []
+            for docx_path in docx_paths:
+                target = output_dir / filename_for(docx_path, 1)
+                target.write_bytes(b"jpeg page")
+                outputs.append(target)
+            return outputs
+
+        with tempfile.TemporaryDirectory() as folder, patch(
+            "desktop_app.frontend.web_bridge.convert_docx_batch_to_images",
+            side_effect=fake_convert,
+        ):
+            for number in (1, 2, 3):
+                Path(folder, f"{number}.jpg").write_bytes(b"source")
+            self.bridge._last_source_dir = folder
+            result = json.loads(
+                self.bridge.generate_service_template_documents("sim_replacement", json.dumps(state), folder)
+            )
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(len(result["paths"]), 2)
+            self.assertEqual(Path(result["paths"][0]).name, "7.jpg")
+            self.assertEqual(Path(result["paths"][1]).name, "8.jpg")
+            Path(folder, "9.jpg").write_bytes(b"stale generated page")
+            repeated = json.loads(
+                self.bridge.generate_service_template_documents("sim_replacement", json.dumps(state), folder)
+            )
+            self.assertTrue(repeated["ok"], repeated)
+            self.assertEqual(Path(repeated["paths"][0]).name, "7.jpg")
+            self.assertEqual(Path(repeated["paths"][1]).name, "8.jpg")
+            self.assertFalse(Path(folder, "9.jpg").exists())
+
+            # If the filesystem fails while committing the new JPG set, the
+            # previous complete result must be restored rather than leaving
+            # a half-replaced dossier.
+            old_page = Path(folder, "7.jpg")
+            old_extra = Path(folder, "8.jpg")
+            old_page.write_bytes(b"old page 7")
+            old_extra.write_bytes(b"old page 8")
+            with patch(
+                "desktop_app.frontend.web_bridge.shutil.copy2",
+                side_effect=OSError("simulated commit failure"),
+            ):
+                failed_commit = json.loads(
+                    self.bridge.generate_service_template_documents(
+                        "sim_replacement", json.dumps(state), folder
+                    )
+                )
+            self.assertFalse(failed_commit["ok"])
+            self.assertEqual(old_page.read_bytes(), b"old page 7")
+            self.assertEqual(old_extra.read_bytes(), b"old page 8")
+
+        # Missing a required field -> fails, no output dict key with paths.
+        state["customer"] = {**state["customer"], "full_name": ""}
+        with tempfile.TemporaryDirectory() as folder:
+            for number in (1, 2, 3):
+                Path(folder, f"{number}.jpg").write_bytes(b"source")
+            self.bridge._last_source_dir = folder
+            result = json.loads(
+                self.bridge.generate_service_template_documents("sim_replacement", json.dumps(state), folder)
+            )
+            self.assertFalse(result["ok"])
+            self.assertTrue(any(e["path"] == "customer.full_name" for e in result["errors"]))
 
 
 if __name__ == "__main__":

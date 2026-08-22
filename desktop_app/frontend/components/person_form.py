@@ -242,7 +242,7 @@ def _resolve_prepaid_person_form(role: str) -> dict:
     visible_names = {
         name for name, _width in items if name is not ROW_BREAK
     }
-    required_names = set(PERSON_INFORMATION_REQUIRED) | {"phone"}
+    required_names = set(PERSON_INFORMATION_REQUIRED)
     if role == "representative":
         required_names.add("representative_position")
     return {
@@ -301,7 +301,7 @@ def resolve_person_form(document_type: DocumentType, role: str, entity_type: str
         }
         base_required = {
             "id_number", "issue_date", "issue_place", "date_of_birth",
-            "address", "nationality", "phone",
+            "address", "nationality",
         }
     else:
         base_visible = {
@@ -334,7 +334,7 @@ def resolve_person_form(document_type: DocumentType, role: str, entity_type: str
             if document_type == DocumentType.PREPAID_CONTRACT:
                 organization_required |= {
                     "business_registration_issue_place", "business_registration_issue_date",
-                    "phone", "representative_position",
+                    "representative_position",
                 }
             required = name in organization_required
         else:

@@ -12,11 +12,11 @@ FIELDS = [
     ("Ngày hòa mạng", "activation_date", True, "date"),
     ("Địa chỉ đơn vị cung cấp", "provider_unit_address", True, "text"),
     ("Người đại diện", "provider_representative", True, "text"),
-    ("Điểm cung cấp dịch vụ viễn thông", "service_point_name", True, "text"),
+    ("Điểm cung cấp dịch vụ viễn thông", "service_point_name", False, "text"),
     ("Nhân viên giao dịch", "staff_name", True, "text"),
     ("Địa điểm giao dịch", "service_point_address", True, "text"),
     ("Số điện thoại", "service_point_phone", True, "number"),
-    ("Thời gian thực hiện", "registration_time", True, "text"),
+    ("Thời gian thực hiện", "registration_time", False, "text"),
 ]
 
 

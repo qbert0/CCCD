@@ -16,7 +16,8 @@ class BeautifulNumberDocumentModule(BaseDocumentModule):
     placeholders = frozenset({
         "beautiful_number_day", "beautiful_number_month", "beautiful_number_year",
         "beautiful_number_customer_name", "beautiful_number_customer_id",
-        "customer_signature_name",
+        "customer_signature_name", "customer_signature_given_name",
+        "provider_representative", "provider_representative_given_name",
     })
     template = resource_path(
         "desktop_app", "backend", "documents", "beautiful_number", "00_MAU_PHU_LUC_CAM_KET_SO_DEP_editable.docx"

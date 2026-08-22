@@ -11,7 +11,6 @@ class AftersaleDocumentModule(BaseDocumentModule):
     schema = AftersaleSchema
     placeholders = frozenset({
         "aftersale_day", "aftersale_month", "aftersale_year",
-        "aftersale_shop_address", "aftersale_shop_phone",
         "aftersale_customer_name", "aftersale_customer_id_number",
         "aftersale_customer_issue_date", "aftersale_customer_issue_place",
         "aftersale_customer_address", "aftersale_customer_phone",
@@ -22,6 +21,9 @@ class AftersaleDocumentModule(BaseDocumentModule):
         "transfer_new_owner_issue_date", "transfer_new_owner_issue_place",
         "requester_role_mark", "new_owner_role_mark", "common_subscriber_number",
         "backup_phone_1_line", "backup_phone_2_line",
+        "aftersale_requester_signature_name", "aftersale_requester_signature_given_name",
+        "aftersale_new_owner_signature_name", "aftersale_new_owner_signature_given_name",
+        "aftersale_clerk_signature_name", "aftersale_clerk_signature_given_name",
     })
     template = resource_path(
         "desktop_app", "backend", "documents", "aftersale", "00_MAU_CAM_KET_SAU_BAN_HANG.docx"

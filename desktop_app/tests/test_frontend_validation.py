@@ -7,6 +7,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtWidgets import QApplication
 
+from PyQt5.QtCore import QSettings
+
 from desktop_app.backend.domain.models import DocumentType
 from desktop_app.backend.ocr import CardSide, OCRFileResult, combine_file_results
 from desktop_app.frontend.pages import HomePage
@@ -18,7 +20,19 @@ class FrontendValidationTest(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
-        self.window = HomePage()
+        # HomePage constructs its own QSettings("CCCDReport", "DesktopApp")
+        # internally -- the real, shared scope a developer's own machine may
+        # already have real company-profile data saved under. Isolate it so
+        # these tests always see the untouched DEFAULT_COMPANY_PROFILE
+        # placeholder, never whatever's actually saved on this machine.
+        # QSettings(IniFormat, UserScope, ...) still persists to a real file
+        # on disk, not memory -- other test files reuse this exact
+        # "CCCDReportTest" scope, so without clearing it, whatever the LAST
+        # test to touch that shared file saved leaks into this one too.
+        isolated = QSettings(QSettings.IniFormat, QSettings.UserScope, "CCCDReportTest", "unused")
+        isolated.clear()
+        with patch("desktop_app.frontend.pages.home_page.QSettings", return_value=isolated):
+            self.window = HomePage()
 
     def tearDown(self):
         self.window.close()

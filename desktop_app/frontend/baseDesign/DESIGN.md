@@ -18,23 +18,23 @@ Giao diện dùng nền kem ấm `#f7f7f4`, chữ near-black `#26251e` và card 
 - Nút: radius 8px. Nút chính màu cam; nút mở/in dùng nền ink; nút phụ trắng.
 - Validation: `#cf2d56`, hiển thị dưới đúng input.
 - Tab: compact, selected dùng nền ink và chữ kem.
-- Drop zone: một vùng nạp ảnh chung, radius 8px, nền `#fafaf7`; OCR tự phân loại vào tối đa hai khung xem trước/sau.
+- Folder panel: một vùng chọn bộ hồ sơ duy nhất, hiển thị trạng thái các slot ảnh 1–6; không có card gửi ảnh riêng lẻ.
 
 ## Layout
 
 - Header phẳng cao khoảng 52–64px, không hiển thị tiến trình hoặc đánh số thao tác.
-- Workspace chia hai cột: CCCD/OCR bên trái, biểu mẫu bên phải.
+- Workspace dùng một workflow card: folder và dịch vụ cùng hàng, danh sách thuê bao bên dưới, hành động tạo ảnh ở cuối.
 - Các ô form reflow thành lưới hai cột liên tục; trường ẩn không để lại khoảng trống.
-- Khung ảnh ưu tiên chiều ngang và giảm chiều cao để dành không gian cho form.
-- Khi cần bên thứ hai, card CCCD bổ sung xuất hiện trong cùng cột trái.
-- Cột trái nằm trong `QScrollArea` để không bị bó hẹp trên màn hình thấp khi có đủ 2 card CCCD.
+- Không hiển thị thumbnail CCCD ở happy path. Trạng thái đủ/thiếu được biểu diễn bằng sáu slot số nhỏ.
+- Toàn bộ form OCR và tài liệu nằm trong disclosure “Kiểm tra và tuỳ chỉnh”, mặc định đóng.
+- Bảng thuê bao là khối độc lập, luôn dùng cùng cấu trúc và có thể nhập trước hoặc sau khi chọn folder.
 
 ## Tương tác và trạng thái
 
-- Mọi input, nút, tab, checkbox và khung thả ảnh đều có trạng thái `:hover` riêng để phản hồi ngay khi rê chuột, trước khi bấm.
-- Khung thả ảnh (`#imageDropZone`) bấm được trực tiếp để mở hộp thoại chọn file, không chỉ kéo-thả; con trỏ chuột đổi thành hình bàn tay.
+- Mọi input, nút, tab và checkbox đều có trạng thái `:hover` riêng để phản hồi ngay khi rê chuột, trước khi bấm.
+- Nút chọn folder là điểm vào duy nhất của ảnh khách hàng; chọn folder mới thay toàn bộ trạng thái OCR của hồ sơ trước.
 - Icon mũi tên combobox và dấu tick checkbox là ảnh PNG nhỏ trong `desktop_app/assets/` (`chevron-down.png`, `checkmark.png`), nạp qua `backend/paths.resource_path()` nên hoạt động cả khi chạy từ mã nguồn lẫn bản đóng gói PyInstaller. Fusion style của Qt ẩn mũi tên native nếu `QComboBox::drop-down` bị tùy biến mà không có `image`, nên hai icon này là bắt buộc, không phải trang trí thêm.
-- Panel "Kết quả OCR" thu gọn mặc định (nút dạng text link `#disclosureButton`, không viền, không nền) để nhường chỗ cho luồng chính; tự mở khi có kết quả OCR mới.
+- Panel "Văn bản OCR thô" nằm trong phần nâng cao và thu gọn mặc định để nhường chỗ cho luồng chính.
 - Nút phụ dạng "ghost" (`#refreshButton`, nền trong suốt, viền hairline) dùng cho hành động ít dùng nhưng cần tách khỏi cụm nút chính — ví dụ "↻ Hồ sơ mới" nằm riêng ở đầu action bar, cách cụm nút chính bằng `addStretch()`.
 - Trạng thái lỗi dùng thống nhất một màu `#cf2d56` ở mọi nơi: viền input, khung ảnh sai mặt (`#imageDropZone[invalid="true"]`), badge trạng thái (`#uploadStatus[invalid="true"]`), dấu `*` bắt buộc và `#fieldError`. Không dùng thêm mã đỏ nào khác.
 - Tiêu đề nhóm trong "Biểu mẫu tài liệu" phân hai cấp: `#sectionEyebrow` (11px, uppercase, tracking rộng, màu muted) đứng trước để giới thiệu nhóm, còn tiêu đề riêng của từng tài liệu vẫn dùng `#subsectionTitle` (14px/600/ink) — tránh hai dòng tiêu đề cùng trọng lượng thị giác đứng liền nhau.

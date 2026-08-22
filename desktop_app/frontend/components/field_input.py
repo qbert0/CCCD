@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+from datetime import datetime
+
 from PyQt5.QtCore import QDate, QEvent, QLocale, QRegularExpression, Qt, pyqtSignal
 from PyQt5.QtGui import QRegularExpressionValidator
 from PyQt5.QtWidgets import (
@@ -52,6 +55,7 @@ class FieldInput(QWidget):
             # a value the calendar can't produce.
             self.input.setCursor(Qt.PointingHandCursor)
             self.input.installEventFilter(self)
+            self.input.editingFinished.connect(self._validate_date)
 
         self.helper = QLabel(helper)
         self.helper.setObjectName("fieldHelper")
@@ -71,7 +75,10 @@ class FieldInput(QWidget):
     def eventFilter(self, obj, event) -> bool:
         if obj is self.input and event.type() == QEvent.MouseButtonPress:
             self._open_calendar()
-            return True
+            # Let QLineEdit receive the same click so the caret can be placed
+            # and the date can still be typed manually while the picker is
+            # available.
+            return False
         return super().eventFilter(obj, event)
 
     def _open_calendar(self) -> None:
@@ -109,9 +116,35 @@ class FieldInput(QWidget):
         popup.close()
 
     def _on_changed(self) -> None:
-        if self.input.text().strip():
+        value = self.input.text().strip()
+        if self._input_kind == "date" and len(value) >= 10:
+            self._validate_date()
+        elif value:
             self.clear_error()
         self.changed.emit()
+
+    @staticmethod
+    def _parsed_date(value: str):
+        for date_format in ("%d/%m/%Y",):
+            try:
+                return datetime.strptime(value, date_format)
+            except ValueError:
+                pass
+        return None
+
+    def _validate_date(self) -> None:
+        value = self.input.text().strip()
+        if not value:
+            self.clear_error()
+            return
+        parsed = self._parsed_date(value)
+        if parsed is None or not re.fullmatch(r"\d{1,2}/\d{1,2}/\d{4}", value):
+            self.set_error("Ngày không hợp lệ. Hãy nhập đúng DD/MM/YYYY.")
+            return
+        normalized = parsed.strftime("%d/%m/%Y")
+        if normalized != value:
+            self.input.setText(normalized)
+        self.clear_error()
 
     def set_required(self, required: bool) -> None:
         self._required = required
