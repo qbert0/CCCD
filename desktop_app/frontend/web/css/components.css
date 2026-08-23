@@ -302,6 +302,34 @@
   border-radius: var(--radius-md);
   background: var(--color-canvas-soft);
 }
+.signature-crop__hint {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+.signature-crop__viewport {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--color-hairline-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-canvas-soft);
+  cursor: grab;
+  touch-action: none;
+  align-self: center;
+}
+.signature-crop__viewport:active { cursor: grabbing; }
+.signature-crop__image {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: none;
+  user-select: none;
+  pointer-events: none;
+}
+.signature-crop__zoom {
+  width: 100%;
+  align-self: center;
+}
 .icon-button {
   display: inline-grid;
   place-items: center;

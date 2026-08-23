@@ -6,6 +6,15 @@
       return {
         state,
         calendar: null,
+        cropModal: null,
+        // job id (from generate_service_template_documents' dispatch-ack) ->
+        // the CCCD.reportDataSnapshot() taken at the moment it was dispatched.
+        // Generation now finishes on its own thread/signal, arbitrarily long
+        // after the click and possibly after the user has switched to a
+        // different case -- persistOperatorFields (see onGenerationFinished
+        // below) must use the snapshot from when THIS job was started, never
+        // a fresh one taken when it happens to finish.
+        pendingGenerations: {},
         profile: null,
         profileLayout: null,
         representative: null,
@@ -66,8 +75,14 @@
           && !!state.ui.sourceFolder
           && !this.missingSourceNumbers.length
           && !!this.firstSubscriberNumber.trim()
-          && !state.ui.sourceProcessing
-          && !state.ui.busy;
+          && !state.ui.sourceProcessing;
+      },
+      // Informational only -- unlike the old state.ui.busy, this never
+      // gates canGenerateService, since a generation job running in the
+      // background is exactly the point: the button stays clickable so a
+      // second (or third...) case can dispatch its own job right away.
+      hasPendingGenerations() {
+        return Object.keys(this.pendingGenerations).length > 0;
       },
       calendarValue() {
         if (!this.calendar) return "";
@@ -96,13 +111,15 @@
     },
     async mounted() {
       await CCCD.bridgeReady;
-      const [initial, serviceTemplateOptions] = await Promise.all([
+      const [initial, serviceTemplateOptions, signatureCropSize] = await Promise.all([
         CCCD.bridge.getInitialState(),
         CCCD.bridge.getServiceTemplates(),
+        CCCD.bridge.getSignatureCropSize(),
       ]);
       Object.assign(state, initial.state);
       state.subscriberLayout = initial.subscriber_layout;
       state.serviceTemplateOptions = serviceTemplateOptions;
+      state.signatureCropSize = signatureCropSize;
       state.serviceFormLayout = {};
       state.serviceDocumentCount = 0;
       state.booted = true;
@@ -159,6 +176,19 @@
         upload.status = "Không đọc được ảnh";
         upload.invalid = true;
         upload.note = message;
+        CCCD.pushToast(message, "error");
+      });
+      CCCD.bridge.onGenerationFinished((jobId, result) => {
+        const snapshot = this.pendingGenerations[jobId];
+        delete this.pendingGenerations[jobId];
+        if (result.ok) {
+          if (snapshot) CCCD.bridge.persistOperatorFields(snapshot);
+          CCCD.pushToast(`Đã tạo bộ hồ sơ gồm ${result.paths.length} ảnh`, "success");
+          return;
+        }
+        const message = result.errors?.length
+          ? result.errors[0].message
+          : (result.message || "Không tạo được bộ tài liệu");
         CCCD.pushToast(message, "error");
       });
     },
@@ -352,20 +382,21 @@
           : await CCCD.bridge.chooseOutputDir();
         if (!folder) return;
 
-        state.ui.busy = true;
-        state.ui.statusMessage = "Đang tạo bộ hồ sơ…";
-        let result;
-        try {
-          result = await CCCD.bridge.generateServiceTemplateDocuments(
-            state.service_template, CCCD.reportDataSnapshot(), folder,
-          );
-        } finally {
-          state.ui.busy = false;
-        }
-        if (result.ok) {
-          CCCD.bridge.persistOperatorFields(CCCD.reportDataSnapshot());
-          CCCD.pushToast(`Đã tạo bộ hồ sơ gồm ${result.paths.length} ảnh`, "success");
-          state.ui.statusMessage = `Đã thay bộ kết quả từ số 7 bằng ${result.paths.length} ảnh mới`;
+        // Dispatch only -- generate_service_template_documents now starts a
+        // background thread and returns right away (job_id) or an
+        // immediate rejection (overloaded / missing source images, both
+        // still fast/local enough not to need threading). The real
+        // success/failure arrives later via onGenerationFinished above, by
+        // which point the user may well have moved to a different case --
+        // so no state.ui.busy gating the whole run, and errors that DO
+        // still arrive here (this form is still the one on screen right
+        // now) are the only ones painted into state.ui.errors.
+        const snapshot = CCCD.reportDataSnapshot();
+        const result = await CCCD.bridge.generateServiceTemplateDocuments(
+          state.service_template, snapshot, folder,
+        );
+        if (result.overloaded) {
+          CCCD.pushToast(result.message, "error");
           return;
         }
         if (result.errors?.length) {
@@ -383,7 +414,13 @@
           );
           return;
         }
-        CCCD.pushToast(result.message || "Không tạo được bộ tài liệu", "error");
+        if (!result.ok) {
+          CCCD.pushToast(result.message || "Không tạo được bộ tài liệu", "error");
+          return;
+        }
+        this.pendingGenerations[result.job_id] = snapshot;
+        state.ui.statusMessage = "Đang tạo bộ hồ sơ ở nền…";
+        CCCD.pushToast("Đang tạo bộ hồ sơ ở nền…", "success");
       },
       openCalendar({ field, root, $event }) {
         this.calendar = { field, root, anchorRect: $event.target.getBoundingClientRect() };
@@ -493,37 +530,65 @@
           service_templates: [],
         });
       },
+      // Every one of the 4 signature-upload sites below only picks a file
+      // and hands the resulting preview to the crop modal -- nothing is
+      // written to disk (or, where applicable, Settings) until the user
+      // confirms a crop and confirmSignatureCrop below gets the final,
+      // already-sized file back from save_cropped_signature.
+      openSignatureCrop(sourceDataUrl, slug, onConfirm) {
+        this.cropModal = { sourceDataUrl, slug, onConfirm };
+      },
+      async confirmSignatureCrop(base64Png) {
+        const { slug, onConfirm } = this.cropModal;
+        this.cropModal = null;
+        const result = await CCCD.bridge.saveCroppedSignature(base64Png, slug);
+        if (!result?.ok) {
+          CCCD.pushToast("Không lưu được ảnh chữ ký", "error");
+          return;
+        }
+        onConfirm(result);
+      },
       async chooseCustomerRepresentativeSignature() {
         const result = await CCCD.bridge.chooseCustomerRepresentativeSignature();
         if (!result?.ok) return;
-        state.customer.signature_path = result.signature_path;
-        state.customer.signature_thumbnail = result.signature_thumbnail;
+        this.openSignatureCrop(result.signature_source, "customer_representative", (final) => {
+          state.customer.signature_path = final.signature_path;
+          state.customer.signature_thumbnail = final.signature_thumbnail;
+        });
       },
       async chooseRepresentativeSignature() {
         const result = await CCCD.bridge.chooseRepresentativeSignature();
         if (!result?.ok) return;
-        this.representative.signature_path = result.signature_path;
-        this.representative.signature_thumbnail = result.signature_thumbnail;
-        CCCD.pushToast("Đã lưu ảnh chữ ký người đại diện", "success");
+        this.openSignatureCrop(result.signature_source, "representative", (final) => {
+          this.representative.signature_path = final.signature_path;
+          this.representative.signature_thumbnail = final.signature_thumbnail;
+          CCCD.pushToast("Đã lưu ảnh chữ ký người đại diện", "success");
+        });
       },
       async chooseProviderSignature() {
         const result = await CCCD.bridge.chooseProviderSignature();
         if (!result?.ok) return;
-        this.providerSignature.signature_path = result.signature_path;
-        this.providerSignature.signature_thumbnail = result.signature_thumbnail;
-        state.provider_signature_path = result.signature_path;
-        CCCD.pushToast("Đã lưu ảnh chữ ký bên cung cấp dịch vụ", "success");
+        this.openSignatureCrop(result.signature_source, "provider", (final) => {
+          this.providerSignature.signature_path = final.signature_path;
+          this.providerSignature.signature_thumbnail = final.signature_thumbnail;
+          state.provider_signature_path = final.signature_path;
+          CCCD.pushToast("Đã lưu ảnh chữ ký bên cung cấp dịch vụ", "success");
+        });
       },
       async chooseOperatorSignature(profileId) {
-        const result = await CCCD.bridge.chooseOperatorSignature(profileId);
+        const result = await CCCD.bridge.chooseOperatorSignature();
         if (!result?.ok) return;
-        const item = this.operatorProfiles.profiles.find(
-          (entry) => entry.profile_id === profileId,
-        );
-        if (item) {
-          item.signature_path = result.signature_path;
-          item.signature_thumbnail = result.signature_thumbnail;
-        }
+        // profileId is already "operator_<suffix>" (see addOperatorProfile
+        // below) -- it IS the slug, not a suffix to prepend one onto.
+        this.openSignatureCrop(result.signature_source, profileId, (final) => {
+          const item = this.operatorProfiles.profiles.find(
+            (entry) => entry.profile_id === profileId,
+          );
+          if (item) {
+            item.signature_path = final.signature_path;
+            item.signature_thumbnail = final.signature_thumbnail;
+          }
+        });
       },
       removeOperatorProfile(profileId) {
         if (this.operatorProfiles.profiles.length <= 1) {
@@ -634,8 +699,8 @@
               @click="generateServiceTemplateDocuments(false)">Lưu sang folder khác…</button>
             <button class="btn btn--primary" type="button" :disabled="!canGenerateService"
               @click="generateServiceTemplateDocuments(true)">
-              <span v-if="state.ui.busy" class="btn-spinner" aria-hidden="true"></span>
-              {{ state.ui.busy ? 'Đang tạo bộ hồ sơ…' : 'Tạo bộ hồ sơ vào folder nguồn' }}
+              <span v-if="hasPendingGenerations" class="btn-spinner" aria-hidden="true"></span>
+              {{ hasPendingGenerations ? 'Đang tạo bộ hồ sơ ở nền…' : 'Tạo bộ hồ sơ vào folder nguồn' }}
             </button>
           </div>
 
@@ -682,6 +747,10 @@
 
       <calendar-popover v-if="calendar && !calendarInProfile" :anchor-rect="calendar.anchorRect"
         :value="calendarValue" @pick="pickDate" @close="calendar = null" />
+
+      <signature-crop-modal v-if="cropModal" :source-data-url="cropModal.sourceDataUrl"
+        :width-mm="state.signatureCropSize.width_mm" :height-mm="state.signatureCropSize.height_mm"
+        @confirm="confirmSignatureCrop" @cancel="cropModal = null" />
 
       <dialog class="modal modal--settings" ref="profileDialog"
         @close="profile = null; representative = null; operatorProfiles = null; providerSignature = null; documentSetSettings = null; calendar = null">
@@ -833,6 +902,7 @@
   app.component("Disclosure", CCCD.components.Disclosure);
   app.component("Tabs", CCCD.components.Tabs);
   app.component("CalendarPopover", CCCD.components.CalendarPopover);
+  app.component("SignatureCropModal", CCCD.components.SignatureCropModal);
   app.component("ToastStack", CCCD.components.ToastStack);
   app.mount("#app");
 })();

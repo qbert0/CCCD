@@ -51,15 +51,28 @@ def has_identity(person: PersonData) -> bool:
 
 
 def thumbnail_data_url(path: Path, max_size: int = 210) -> str:
-    """Small scaled JPEG as a base64 data URL -- the web view never reads a
-    filesystem path directly, for either the native-dialog or the
-    HTML5-drop upload entry point."""
+    """Small scaled image as a base64 data URL -- the web view never reads
+    a filesystem path directly, for either the native-dialog or the
+    HTML5-drop upload entry point.
+
+    PNG (lossless, keeps alpha) when the source actually has transparency
+    -- a background-removed signature photo saved as JPEG here would have
+    every transparent pixel flattened to opaque black (Qt fills dropped
+    alpha with black, not white, and JPEG has no alpha channel at all to
+    begin with). JPEG otherwise, since most sources (CCCD scans etc.) are
+    fully opaque photos where the smaller lossy encoding doesn't cost
+    anything visible."""
     pixmap = QPixmap(str(path))
     if pixmap.isNull():
         return ""
     scaled = pixmap.scaled(max_size, max_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
     buffer = QBuffer()
     buffer.open(QBuffer.WriteOnly)
-    scaled.save(buffer, "JPEG", quality=85)
+    if scaled.hasAlphaChannel():
+        scaled.save(buffer, "PNG")
+        mime = "image/png"
+    else:
+        scaled.save(buffer, "JPEG", quality=85)
+        mime = "image/jpeg"
     encoded = base64.b64encode(bytes(buffer.data())).decode("ascii")
-    return f"data:image/jpeg;base64,{encoded}"
+    return f"data:{mime};base64,{encoded}"

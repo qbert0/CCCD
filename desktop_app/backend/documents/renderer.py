@@ -12,13 +12,15 @@ from docx.dml.color import RGBColor
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Mm, Pt
+from docx.shared import Emu, Mm, Pt
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 from pypdf import PdfReader, PdfWriter
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
+
+from PIL import Image
 
 from desktop_app.backend.documents.font_embed import SIGNATURE_FONT_NAME
 from desktop_app.backend.domain.models import DocumentType, ReportData
@@ -348,6 +350,24 @@ SIGNATURE_IMAGE_SLOTS = (
 )
 SIGNATURE_IMAGE_HEIGHT = Mm(32)  # doubled from the original Mm(16) per direct instruction; the x1.5 bump to 48 was reverted as too large
 
+# The fixed crop rectangle the signature-upload UI now crops every image
+# into before it ever reaches this module (see web_bridge's
+# save_cropped_signature) -- 58mm fits every real signature slot's own
+# <w:tcW> across all 5 templates with room to spare, the tightest being
+# aftersale's 3-signatures-in-one-row layout (61.7mm/cell, 58mm leaves
+# 3.7mm) -- confirmed against real measured cell widths, not guessed.
+# Deliberately its own constant rather than reusing SIGNATURE_IMAGE_HEIGHT
+# (32mm) for the height: that constant is the *other* session's own
+# visually-tuned value for the aspect-preserving fallback fit just below
+# (used only for a signature file that predates this crop step), a
+# different purpose that shouldn't silently move just because this one
+# changed. zero_signature_cell_margins.py (desktop_app/scripts/) strips
+# each of these cells' own tcMar to 0 on all sides -- matched here so the
+# UI's crop-tool math sees exactly what the template will actually give
+# the image, no invisible cell padding eating into the fit.
+SIGNATURE_FORM_WIDTH = Mm(58)
+SIGNATURE_FORM_HEIGHT = Mm(36)
+
 # "Người đại diện" (representative_profile) has no dedicated ký-tên/họ-tên
 # signature block anywhere in prepaid_contract -- its name only appears
 # inline, sharing a paragraph with static label text ("Người đại
@@ -364,11 +384,37 @@ def _resolve_path_attr(data: ReportData, dotted_attr: str) -> str:
     return str(value or "")
 
 
+def _signature_image_size(image_path: str) -> tuple[Emu, Emu]:
+    """Fit `image_path` inside the (SIGNATURE_FORM_WIDTH, SIGNATURE_FORM_HEIGHT)
+    box, preserving its own aspect ratio. Every signature uploaded through
+    the crop tool (SignatureCropModal, js/components.js) already IS that
+    exact box, so this resolves to that same size unchanged for the common
+    case -- it only actually reshapes anything for a file that predates
+    the crop tool (an old upload still sitting in Settings, not yet
+    replaced). 58x36mm already fits every real signature slot's own cell
+    with room to spare (see SIGNATURE_FORM_WIDTH's own note), so unlike
+    before this no longer needs to measure the containing table cell at
+    all -- one fixed target box for every slot, everywhere."""
+    with Image.open(image_path) as image:
+        source_width, source_height = image.size
+    if source_width <= 0 or source_height <= 0:
+        return SIGNATURE_FORM_WIDTH, SIGNATURE_FORM_HEIGHT
+
+    aspect_ratio = source_width / source_height
+    max_width, max_height = int(SIGNATURE_FORM_WIDTH), int(SIGNATURE_FORM_HEIGHT)
+    width, height = max_width, int(max_width / aspect_ratio)
+    if height > max_height:
+        height = max_height
+        width = int(max_height * aspect_ratio)
+    return Emu(width), Emu(height)
+
+
 def _insert_signature_image(paragraph: Paragraph, image_path: str) -> None:
     for run in list(paragraph.runs):
         run.text = ""
     run = paragraph.runs[0] if paragraph.runs else paragraph.add_run()
-    run.add_picture(image_path, height=SIGNATURE_IMAGE_HEIGHT)
+    width, height = _signature_image_size(image_path)
+    run.add_picture(image_path, width=width, height=height)
 
 
 def _clear_paragraph_text(paragraph: Paragraph) -> None:

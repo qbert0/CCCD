@@ -652,6 +652,152 @@ CCCD.components.CalendarPopover = {
 };
 
 // ---------------------------------------------------------------------------
+// Signature crop/position tool -- every signature upload (operator,
+// provider, representative, customer representative) routes through this
+// before a file is ever written to disk, so every stored signature ends up
+// the exact same physical size (see SIGNATURE_FORM_WIDTH/HEIGHT in
+// renderer.py, mirrored here via widthMm/heightMm from
+// bridge.getSignatureCropSize()). The user drags/zooms a fixed-aspect
+// viewport over their photo; confirming rasterizes exactly what's visible
+// onto an offscreen canvas at print resolution and emits that as a PNG data
+// URL for the caller to hand to bridge.saveCroppedSignature.
+// ---------------------------------------------------------------------------
+const DISPLAY_PX_PER_MM = 6; // on-screen viewport size only, independent of export resolution
+const EXPORT_DPI = 300;
+const MAX_ZOOM_MULTIPLIER = 3; // how far past "just covers the frame" the user can zoom in
+
+CCCD.components.SignatureCropModal = {
+  props: { sourceDataUrl: String, widthMm: Number, heightMm: Number },
+  emits: ["confirm", "cancel"],
+  data() {
+    return {
+      naturalWidth: 0,
+      naturalHeight: 0,
+      scale: 0,
+      minScale: 0,
+      offsetX: 0,
+      offsetY: 0,
+      dragging: null,
+    };
+  },
+  computed: {
+    viewportWidthPx() {
+      return this.widthMm * DISPLAY_PX_PER_MM;
+    },
+    viewportHeightPx() {
+      return this.heightMm * DISPLAY_PX_PER_MM;
+    },
+    ready() {
+      return this.naturalWidth > 0 && this.naturalHeight > 0;
+    },
+    imageStyle() {
+      if (!this.ready) return { display: "none" };
+      return {
+        width: `${this.naturalWidth * this.scale}px`,
+        height: `${this.naturalHeight * this.scale}px`,
+        transform: `translate(${this.offsetX}px, ${this.offsetY}px)`,
+      };
+    },
+  },
+  mounted() {
+    this.$refs.dialog.showModal();
+  },
+  methods: {
+    onImageLoad(event) {
+      this.naturalWidth = event.target.naturalWidth;
+      this.naturalHeight = event.target.naturalHeight;
+      // "Cover" fit: the smallest scale at which the image still fills the
+      // whole frame on both axes -- the "phóng to đến khi 1 chiều bằng
+      // khung" requirement. Never allowed to zoom out past this, or the
+      // frame would show empty space past the image's own edges.
+      this.minScale = Math.max(
+        this.viewportWidthPx / this.naturalWidth,
+        this.viewportHeightPx / this.naturalHeight,
+      );
+      this.scale = this.minScale;
+      this.offsetX = (this.viewportWidthPx - this.naturalWidth * this.scale) / 2;
+      this.offsetY = (this.viewportHeightPx - this.naturalHeight * this.scale) / 2;
+    },
+    onZoomInput(event) {
+      this.scale = Number(event.target.value);
+      this.clampOffsets();
+    },
+    clampOffsets() {
+      const dispWidth = this.naturalWidth * this.scale;
+      const dispHeight = this.naturalHeight * this.scale;
+      // Image edges may never move inside the frame -- offsetX/Y is the
+      // image's own top-left corner in viewport px, so it's clamped
+      // between "right/bottom edge exactly on the frame's far edge" and
+      // "left/top edge exactly on the frame's near edge" (0).
+      this.offsetX = Math.min(0, Math.max(this.viewportWidthPx - dispWidth, this.offsetX));
+      this.offsetY = Math.min(0, Math.max(this.viewportHeightPx - dispHeight, this.offsetY));
+    },
+    startDrag(event) {
+      if (!this.ready) return;
+      this.dragging = {
+        startClientX: event.clientX, startClientY: event.clientY,
+        startOffsetX: this.offsetX, startOffsetY: this.offsetY,
+      };
+      window.addEventListener("pointermove", this.onDrag);
+      window.addEventListener("pointerup", this.endDrag);
+    },
+    onDrag(event) {
+      if (!this.dragging) return;
+      this.offsetX = this.dragging.startOffsetX + (event.clientX - this.dragging.startClientX);
+      this.offsetY = this.dragging.startOffsetY + (event.clientY - this.dragging.startClientY);
+      this.clampOffsets();
+    },
+    endDrag() {
+      this.dragging = null;
+      window.removeEventListener("pointermove", this.onDrag);
+      window.removeEventListener("pointerup", this.endDrag);
+    },
+    confirm() {
+      if (!this.ready) return;
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round((this.widthMm / 25.4) * EXPORT_DPI);
+      canvas.height = Math.round((this.heightMm / 25.4) * EXPORT_DPI);
+      // Invert the current viewport transform back into source-image pixel
+      // space: viewport (0,0) sits `-offsetX/scale, -offsetY/scale` into
+      // the source image, and the frame's own on-screen size maps to
+      // viewport size / scale source pixels.
+      const sx = -this.offsetX / this.scale;
+      const sy = -this.offsetY / this.scale;
+      const sw = this.viewportWidthPx / this.scale;
+      const sh = this.viewportHeightPx / this.scale;
+      canvas.getContext("2d").drawImage(
+        this.$refs.image, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height,
+      );
+      const base64 = canvas.toDataURL("image/png").split(",", 2)[1];
+      this.$emit("confirm", base64);
+    },
+    cancel() {
+      this.$emit("cancel");
+    },
+  },
+  template: `
+    <dialog ref="dialog" class="modal signature-crop-modal" @close="cancel" @cancel="cancel">
+      <div class="modal__body">
+        <h3 class="modal__title">Căn chỉnh ảnh chữ ký</h3>
+        <p class="signature-crop__hint">Kéo ảnh để chọn vị trí, dùng thanh trượt để phóng to.</p>
+        <div class="signature-crop__viewport" :style="{ width: viewportWidthPx + 'px', height: viewportHeightPx + 'px' }"
+          @pointerdown="startDrag">
+          <img ref="image" :src="sourceDataUrl" class="signature-crop__image" :style="imageStyle"
+            draggable="false" @load="onImageLoad" alt="Ảnh chữ ký">
+        </div>
+        <input v-if="ready" type="range" class="signature-crop__zoom"
+          :min="minScale" :max="minScale * ${MAX_ZOOM_MULTIPLIER}" step="any"
+          :value="scale" @input="onZoomInput">
+        <div class="modal__actions">
+          <button type="button" class="btn btn--ghost" @click="cancel">Hủy</button>
+          <button type="button" class="btn btn--primary" :disabled="!ready" @click="confirm">Dùng ảnh này</button>
+        </div>
+      </div>
+    </dialog>
+  `,
+};
+
+// ---------------------------------------------------------------------------
 // Toasts
 // ---------------------------------------------------------------------------
 CCCD.components.ToastStack = {

@@ -7,14 +7,16 @@ existing pure functions and Qt services.
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 import shutil
 import tempfile
+import uuid
 from dataclasses import asdict
 from pathlib import Path
 
-from PyQt5.QtCore import QObject, QSettings, QStandardPaths, QUrl, pyqtSignal, pyqtSlot
+from PyQt5.QtCore import QObject, QSettings, QStandardPaths, QThread, QUrl, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import QFileDialog
 
@@ -43,6 +45,7 @@ from desktop_app.backend.documents import (
     required_input_numbers,
     scan_numbered_images,
 )
+from desktop_app.backend.documents.renderer import SIGNATURE_FORM_HEIGHT, SIGNATURE_FORM_WIDTH
 from desktop_app.backend.domain.models import (
     DOCUMENT_NAMES,
     DOCUMENT_SHORT_NAMES,
@@ -104,18 +107,12 @@ PROVIDER_SIGNATURE_SETTINGS_KEY = "provider_signature_path"
 DEFAULT_SERVICE_POINT_NAME = "TD Vietnamobile"
 
 
-def _store_signature_image(source: Path, slug: str) -> Path:
-    """Copy a user-picked signature image into durable app-data storage
-    (not left pointing at wherever the original file happens to live --
-    that path can move or disappear) under a stable, per-signer name so a
-    later upload for the same signer cleanly replaces the previous file."""
+def _signatures_dir() -> Path:
     signatures_dir = Path(
         QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
     ) / "signatures"
     signatures_dir.mkdir(parents=True, exist_ok=True)
-    destination = signatures_dir / f"{slug}{source.suffix.casefold()}"
-    shutil.copy2(source, destination)
-    return destination
+    return signatures_dir
 
 
 def _needs_new_owner(document_type: DocumentType, service_action: str) -> bool:
@@ -124,11 +121,152 @@ def _needs_new_owner(document_type: DocumentType, service_action: str) -> bool:
     }
 
 
+# How many "Tạo bộ hồ sơ" clicks can run at once (one QThread each, see
+# DocumentGenerationWorker) before a new click is refused outright rather
+# than silently queued -- an unbounded number of concurrent PaddleOCR-class
+# workloads would just thrash the machine instead of finishing faster.
+MAX_CONCURRENT_GENERATION_JOBS = 10
+
+
+class DocumentGenerationWorker(QThread):
+    """One "Tạo bộ hồ sơ" job on its own OS thread -- mirrors OCRWorker
+    (desktop_app/frontend/pages/home_page.py) exactly: every value this
+    needs is captured here at construction time, on the calling (main)
+    thread, so run() never reads back into a live WebBridge attribute
+    (self.document_set_overrides, self._last_source_dir, self.settings)
+    that another slot could mutate -- e.g. the user picking a different
+    source folder or saving different document-set settings -- while this
+    job is still in flight for an earlier case."""
+
+    finished_job = pyqtSignal(str, str)  # job_id, JSON result
+
+    def __init__(
+        self, job_id: str, template: ServiceTemplate, data: ReportData,
+        document_types: list, folder: Path, source_dir: Path | None,
+        source_images: dict, parent=None,
+    ):
+        super().__init__(parent)
+        self.job_id = job_id
+        self.template = template
+        self.data = data
+        self.document_types = document_types
+        self.folder = folder
+        self.source_dir = source_dir
+        self.source_images = source_images
+
+    def run(self) -> None:
+        # Identical body to the old synchronous generate_service_template_documents
+        # (generation -> image conversion -> atomic commit), just operating
+        # on this worker's own constructor-captured values instead of self.*,
+        # and emitting the result instead of returning it.
+        try:
+            counter = next_output_number(self.folder)
+            with tempfile.TemporaryDirectory() as tmp:
+                temp_root = Path(tmp)
+                docx_dir = temp_root / "documents"
+                staged_images_dir = temp_root / "images"
+                docx_outputs, errors = generate_service_template(
+                    self.template, self.data, docx_dir, self.document_types,
+                )
+                if errors:
+                    seen: set[tuple[str, str]] = set()
+                    error_list = []
+                    for error in errors:
+                        # Document variants retain historical field paths,
+                        # but the visible editor owns one canonical list.
+                        path = error.path
+                        for internal_prefix in ("beautiful_subscribers.", "prepaid_subscribers."):
+                            if path.startswith(internal_prefix):
+                                path = "subscribers." + path[len(internal_prefix):]
+                        path = {
+                            "subscriber_number": "subscribers.0.subscriber_number",
+                            "sim_serial": "subscribers.0.sim_serial",
+                            "activation_date": "subscribers.0.activation_date",
+                        }.get(path, path)
+                        key = (path, error.message)
+                        if key not in seen:
+                            seen.add(key)
+                            error_list.append({"path": path, "message": error.message})
+                    self.finished_job.emit(
+                        self.job_id, json.dumps({"ok": False, "errors": error_list, "paths": []}),
+                    )
+                    return
+
+                def name_page(_docx_path: Path, _page_index: int) -> str:
+                    nonlocal counter
+                    result = f"{counter}.jpg"
+                    counter += 1
+                    return result
+
+                staged_outputs = convert_docx_batch_to_images(
+                    docx_outputs, staged_images_dir, filename_for=name_page,
+                )
+
+                # Commit only after generation and conversion have both
+                # succeeded. Inputs 1-6 are refreshed when exporting to a
+                # different folder, so that destination is self-contained.
+                self.folder.mkdir(parents=True, exist_ok=True)
+                if self.source_dir and self.source_dir.resolve() != self.folder.resolve():
+                    for number, source_path in self.source_images.items():
+                        if 1 <= number <= 6:
+                            shutil.copy2(
+                                source_path, self.folder / f"{number}{source_path.suffix.casefold()}",
+                            )
+
+                # A multi-file result cannot be replaced by one filesystem
+                # syscall, so keep the complete old set in a same-volume
+                # backup until every new page is installed. Any commit
+                # failure restores the exact previous result, including
+                # pages that the new shorter set would otherwise remove.
+                final_outputs: list[Path] = []
+                installed: list[Path] = []
+                pending_paths: list[Path] = []
+                old_outputs = generated_output_images(self.folder)
+                with tempfile.TemporaryDirectory(prefix=".cccd-report-backup-", dir=self.folder) as backup:
+                    backup_dir = Path(backup)
+                    backed_up: list[tuple[Path, Path]] = []
+                    try:
+                        for old_path in old_outputs:
+                            backup_path = backup_dir / old_path.name
+                            old_path.replace(backup_path)
+                            backed_up.append((old_path, backup_path))
+                        for staged in staged_outputs:
+                            final_path = self.folder / staged.name
+                            pending = self.folder / f".cccd-report-{staged.name}.tmp"
+                            pending_paths.append(pending)
+                            shutil.copy2(staged, pending)
+                            pending.replace(final_path)
+                            installed.append(final_path)
+                            final_outputs.append(final_path)
+                    except Exception:
+                        for pending in pending_paths:
+                            if pending.exists():
+                                pending.unlink()
+                        for final_path in installed:
+                            if final_path.exists():
+                                final_path.unlink()
+                        for original, backup_path in backed_up:
+                            if backup_path.exists():
+                                backup_path.replace(original)
+                        raise
+        except ConversionToolsMissing as exc:
+            self.finished_job.emit(self.job_id, json.dumps({"ok": False, "message": str(exc), "paths": []}))
+            return
+        except Exception as exc:  # noqa: BLE001
+            self.finished_job.emit(self.job_id, json.dumps({"ok": False, "message": str(exc), "paths": []}))
+            return
+        self.finished_job.emit(
+            self.job_id,
+            json.dumps({"ok": True, "paths": [str(path) for path in final_outputs], "folder": str(self.folder)}),
+        )
+
+
 class WebBridge(QObject):
     ocrProgress = pyqtSignal(str, int, int)
     ocrFileResult = pyqtSignal(str, str)
     ocrBatchFinished = pyqtSignal(str, str)
     ocrBatchFailed = pyqtSignal(str, str)
+    generationFinished = pyqtSignal(str, str)
 
     def __init__(self, window, parent=None):
         super().__init__(parent)
@@ -143,6 +281,7 @@ class WebBridge(QObject):
         self._active_document_type: DocumentType | None = None
         self._service_action = "Cập nhật thông tin"
         self.workers: list = []
+        self._generation_workers: dict[str, DocumentGenerationWorker] = {}
         self._accepted_files: dict[str, dict[CardSide, OCRFileResult]] = {
             "customer": {}, "new_owner": {}, "representative": {},
         }
@@ -848,6 +987,18 @@ class WebBridge(QObject):
         `choose_output_dir` below. An empty string means "use the saved
         default output dir" (point 5 of the dịch vụ workflow).
 
+        Only dispatches a DocumentGenerationWorker and returns right away
+        (`{"ok": True, "job_id": ...}`) -- the actual generate -> convert ->
+        commit pipeline (see that class) now runs on its own thread so the
+        GUI/QWebEngineView thread stays free for the user to keep editing a
+        different case while an earlier "Tạo bộ hồ sơ" click is still
+        running. The real result arrives later via the generationFinished
+        signal, keyed by job_id. Every value the worker needs is resolved
+        HERE, on the main thread, before it starts -- see
+        DocumentGenerationWorker's own docstring for why (this call is the
+        one place a snapshot of "what the live Settings/state say right
+        now" is taken; nothing after dispatch ever re-reads it).
+
         The real product here is images, not the .docx files -- by explicit
         request ("cái tôi cần là ảnh chứ không phải là tài liệu word"). Each
         document is generated into a throwaway temp folder, converted to
@@ -860,6 +1011,16 @@ class WebBridge(QObject):
         page numbers, then removes obsolete extra pages from the previous
         result. It never appends 12, 13, ... to an old run.
         """
+        if len(self._generation_workers) >= MAX_CONCURRENT_GENERATION_JOBS:
+            return json.dumps({
+                "ok": False,
+                "overloaded": True,
+                "message": (
+                    f"Máy đang quá tải (đã có {MAX_CONCURRENT_GENERATION_JOBS} "
+                    "bộ hồ sơ đang tạo cùng lúc), đợi một bộ xong rồi thử lại."
+                ),
+            })
+
         template = ServiceTemplate(template_value)
         document_types = self.document_set_overrides[template]
         state = json.loads(state_json)
@@ -867,107 +1028,31 @@ class WebBridge(QObject):
             state["document_type"] = document_types[0].value
         data = self._report_data_from_state(state)
         folder = Path(output_dir) if output_dir else Path(json.loads(self.get_default_output_dir()))
-        try:
-            source_dir = Path(self._last_source_dir) if self._last_source_dir else None
-            source_images = scan_numbered_images(source_dir) if source_dir else {}
-            missing_inputs = [number for number in required_input_numbers(template) if number not in source_images]
-            if missing_inputs:
-                return json.dumps({
-                    "ok": False,
-                    "errors": [{
-                        "path": "source_folder",
-                        "message": "Bộ hồ sơ thiếu ảnh " + ", ".join(f"{number}.jpg" for number in missing_inputs),
-                    }],
-                    "paths": [],
-                })
+        source_dir = Path(self._last_source_dir) if self._last_source_dir else None
+        source_images = scan_numbered_images(source_dir) if source_dir else {}
+        missing_inputs = [number for number in required_input_numbers(template) if number not in source_images]
+        if missing_inputs:
+            return json.dumps({
+                "ok": False,
+                "errors": [{
+                    "path": "source_folder",
+                    "message": "Bộ hồ sơ thiếu ảnh " + ", ".join(f"{number}.jpg" for number in missing_inputs),
+                }],
+                "paths": [],
+            })
 
-            counter = next_output_number(folder)
-            with tempfile.TemporaryDirectory() as tmp:
-                temp_root = Path(tmp)
-                docx_dir = temp_root / "documents"
-                staged_images_dir = temp_root / "images"
-                docx_outputs, errors = generate_service_template(template, data, docx_dir, document_types)
-                if errors:
-                    seen: set[tuple[str, str]] = set()
-                    error_list = []
-                    for error in errors:
-                        # Document variants retain historical field paths,
-                        # but the visible editor owns one canonical list.
-                        path = error.path
-                        for internal_prefix in ("beautiful_subscribers.", "prepaid_subscribers."):
-                            if path.startswith(internal_prefix):
-                                path = "subscribers." + path[len(internal_prefix):]
-                        path = {
-                            "subscriber_number": "subscribers.0.subscriber_number",
-                            "sim_serial": "subscribers.0.sim_serial",
-                            "activation_date": "subscribers.0.activation_date",
-                        }.get(path, path)
-                        key = (path, error.message)
-                        if key not in seen:
-                            seen.add(key)
-                            error_list.append({"path": path, "message": error.message})
-                    return json.dumps({"ok": False, "errors": error_list, "paths": []})
+        job_id = uuid.uuid4().hex
+        worker = DocumentGenerationWorker(
+            job_id, template, data, document_types, folder, source_dir, source_images, self,
+        )
+        worker.finished_job.connect(self._generation_job_finished)
+        self._generation_workers[job_id] = worker
+        worker.start()
+        return json.dumps({"ok": True, "job_id": job_id})
 
-                def name_page(_docx_path: Path, _page_index: int) -> str:
-                    nonlocal counter
-                    result = f"{counter}.jpg"
-                    counter += 1
-                    return result
-
-                staged_outputs = convert_docx_batch_to_images(
-                    docx_outputs, staged_images_dir, filename_for=name_page,
-                )
-
-                # Commit only after generation and conversion have both
-                # succeeded. Inputs 1-6 are refreshed when exporting to a
-                # different folder, so that destination is self-contained.
-                folder.mkdir(parents=True, exist_ok=True)
-                if source_dir and source_dir.resolve() != folder.resolve():
-                    for number, source_path in source_images.items():
-                        if 1 <= number <= 6:
-                            shutil.copy2(source_path, folder / f"{number}{source_path.suffix.casefold()}")
-
-                # A multi-file result cannot be replaced by one filesystem
-                # syscall, so keep the complete old set in a same-volume
-                # backup until every new page is installed. Any commit
-                # failure restores the exact previous result, including
-                # pages that the new shorter set would otherwise remove.
-                final_outputs: list[Path] = []
-                installed: list[Path] = []
-                pending_paths: list[Path] = []
-                old_outputs = generated_output_images(folder)
-                with tempfile.TemporaryDirectory(prefix=".cccd-report-backup-", dir=folder) as backup:
-                    backup_dir = Path(backup)
-                    backed_up: list[tuple[Path, Path]] = []
-                    try:
-                        for old_path in old_outputs:
-                            backup_path = backup_dir / old_path.name
-                            old_path.replace(backup_path)
-                            backed_up.append((old_path, backup_path))
-                        for staged in staged_outputs:
-                            final_path = folder / staged.name
-                            pending = folder / f".cccd-report-{staged.name}.tmp"
-                            pending_paths.append(pending)
-                            shutil.copy2(staged, pending)
-                            pending.replace(final_path)
-                            installed.append(final_path)
-                            final_outputs.append(final_path)
-                    except Exception:
-                        for pending in pending_paths:
-                            if pending.exists():
-                                pending.unlink()
-                        for final_path in installed:
-                            if final_path.exists():
-                                final_path.unlink()
-                        for original, backup_path in backed_up:
-                            if backup_path.exists():
-                                backup_path.replace(original)
-                        raise
-        except ConversionToolsMissing as exc:
-            return json.dumps({"ok": False, "message": str(exc), "paths": []})
-        except Exception as exc:  # noqa: BLE001
-            return json.dumps({"ok": False, "message": str(exc), "paths": []})
-        return json.dumps({"ok": True, "paths": [str(path) for path in final_outputs], "folder": str(folder)})
+    def _generation_job_finished(self, job_id: str, result_json: str) -> None:
+        self._generation_workers.pop(job_id, None)
+        self.generationFinished.emit(job_id, result_json)
 
     @pyqtSlot(result=str)
     def choose_output_dir(self) -> str:
@@ -1025,24 +1110,20 @@ class WebBridge(QObject):
             ],
         })
 
-    @pyqtSlot(str, result=str)
-    def choose_operator_signature(self, profile_id: str) -> str:
-        """Native file picker for one clerk's own signature image -- copied
-        into durable app-data storage (not left pointing at wherever the
-        user's original file happens to live) and returned so the caller
-        can stash it on that profile's own entry before saving."""
+    @pyqtSlot(result=str)
+    def choose_operator_signature(self) -> str:
+        """Native file picker for one clerk's own signature image. Just
+        picks the file and hands back a display-sized preview -- the crop
+        modal (SignatureCropModal, js/components.js) shows this, and only
+        once the user confirms their crop does save_cropped_signature
+        below write the final file, keyed by that profile's own slug."""
         path, _ = QFileDialog.getOpenFileName(
             self.window, "Chọn ảnh chữ ký giao dịch viên", str(Path.home()),
             "Ảnh (*.png *.jpg *.jpeg)",
         )
         if not path:
             return json.dumps({"ok": False})
-        stored = _store_signature_image(Path(path), profile_id)
-        return json.dumps({
-            "ok": True,
-            "signature_path": str(stored),
-            "signature_thumbnail": thumbnail_data_url(stored),
-        })
+        return json.dumps({"ok": True, "signature_source": thumbnail_data_url(Path(path), max_size=1600)})
 
     @pyqtSlot(str, result=str)
     def save_operator_profiles(self, profiles_json: str) -> str:
@@ -1089,6 +1170,50 @@ class WebBridge(QObject):
         return json.dumps({"ok": True})
 
     # ------------------------------------------------------------------
+    # Signature crop/position tool -- every choose_*_signature slot above
+    # (and Bên B / representative below) only picks a file and returns a
+    # preview; this pair is the shared "confirm" step every one of them
+    # funnels through, so every signature file that ends up on disk is
+    # already cropped to the exact same rectangle (SignatureCropModal in
+    # js/components.js does the actual cropping, client-side, onto a
+    # <canvas>, then hands the PNG bytes here).
+    # ------------------------------------------------------------------
+
+    @pyqtSlot(result=str)
+    def get_signature_crop_size(self) -> str:
+        return json.dumps({
+            "width_mm": SIGNATURE_FORM_WIDTH / 36000,
+            "height_mm": SIGNATURE_FORM_HEIGHT / 36000,
+        })
+
+    @pyqtSlot(str, str, result=str)
+    def save_cropped_signature(self, base64_png: str, slug: str) -> str:
+        """Write a client-cropped signature PNG to its slot's stable,
+        per-signer file (always .png now, regardless of what format the
+        original upload was -- the crop step always re-encodes). `slug`
+        is one of the same per-signer names the old _store_signature_image
+        used: "provider", "representative", "customer_representative", or
+        f"operator_{profile_id}" -- the caller already knows which, same
+        as it always has. Provider and representative persist immediately
+        here (mirroring their old choose_*_signature behavior); operator
+        profiles still wait for the explicit "Lưu giao dịch viên" save,
+        and customer_representative is never persisted to Settings at all
+        (per-case only) -- same 3-way split as before this feature."""
+        destination = _signatures_dir() / f"{slug}.png"
+        destination.write_bytes(base64.b64decode(base64_png))
+        if slug == "provider":
+            self.settings.setValue(PROVIDER_SIGNATURE_SETTINGS_KEY, str(destination))
+            self.settings.sync()
+        elif slug == "representative":
+            self.representative_profile.signature_path = str(destination)
+            save_representative_profile_storage(self.settings, self.representative_profile)
+        return json.dumps({
+            "ok": True,
+            "signature_path": str(destination),
+            "signature_thumbnail": thumbnail_data_url(destination),
+        })
+
+    # ------------------------------------------------------------------
     # Bên B / "Đại diện bên cung cấp dịch vụ" own signature image -- one
     # shop-wide setting, independent of any profile (see
     # PROVIDER_SIGNATURE_SETTINGS_KEY above).
@@ -1112,14 +1237,7 @@ class WebBridge(QObject):
         )
         if not path:
             return json.dumps({"ok": False})
-        stored = _store_signature_image(Path(path), "provider")
-        self.settings.setValue(PROVIDER_SIGNATURE_SETTINGS_KEY, str(stored))
-        self.settings.sync()
-        return json.dumps({
-            "ok": True,
-            "signature_path": str(stored),
-            "signature_thumbnail": thumbnail_data_url(stored),
-        })
+        return json.dumps({"ok": True, "signature_source": thumbnail_data_url(Path(path), max_size=1600)})
 
     # ------------------------------------------------------------------
     # Which documents each service generates -- a safety net for a wrong
@@ -1228,20 +1346,16 @@ class WebBridge(QObject):
         """The old owner's own org representative's signature -- unlike
         choose_representative_signature (a persistent Settings profile),
         this is genuinely per-case (a different real organization/signer
-        every time) so it's just copied and returned, never saved to
-        QSettings; the caller stashes it directly on state.customer."""
+        every time), so save_cropped_signature's "customer_representative"
+        slug is never persisted to QSettings either; the caller stashes
+        the confirmed result directly on state.customer."""
         path, _ = QFileDialog.getOpenFileName(
             self.window, "Chọn ảnh chữ ký đại diện bên khách hàng", str(Path.home()),
             "Ảnh (*.png *.jpg *.jpeg)",
         )
         if not path:
             return json.dumps({"ok": False})
-        stored = _store_signature_image(Path(path), "customer_representative")
-        return json.dumps({
-            "ok": True,
-            "signature_path": str(stored),
-            "signature_thumbnail": thumbnail_data_url(stored),
-        })
+        return json.dumps({"ok": True, "signature_source": thumbnail_data_url(Path(path), max_size=1600)})
 
     @pyqtSlot(result=str)
     def choose_representative_signature(self) -> str:
@@ -1255,14 +1369,7 @@ class WebBridge(QObject):
         )
         if not path:
             return json.dumps({"ok": False})
-        stored = _store_signature_image(Path(path), "representative")
-        self.representative_profile.signature_path = str(stored)
-        save_representative_profile_storage(self.settings, self.representative_profile)
-        return json.dumps({
-            "ok": True,
-            "signature_path": str(stored),
-            "signature_thumbnail": thumbnail_data_url(stored),
-        })
+        return json.dumps({"ok": True, "signature_source": thumbnail_data_url(Path(path), max_size=1600)})
 
     @pyqtSlot(str, result=str)
     def save_company_profile(self, person_json: str) -> str:
