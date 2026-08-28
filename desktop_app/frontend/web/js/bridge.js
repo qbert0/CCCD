@@ -30,9 +30,11 @@ CCCD.bridgeReady = new Promise((resolve) => {
       chooseCustomerRepresentativeSignature: () => call("choose_customer_representative_signature"),
       getOperatorProfiles: () => call("get_operator_profiles"),
       saveOperatorProfiles: (profiles) => call("save_operator_profiles", JSON.stringify(profiles)),
-      chooseOperatorSignature: (profileId) => call("choose_operator_signature", profileId),
+      chooseOperatorSignature: () => call("choose_operator_signature"),
       getProviderSignature: () => call("get_provider_signature"),
       chooseProviderSignature: () => call("choose_provider_signature"),
+      getSignatureCropSize: () => call("get_signature_crop_size"),
+      saveCroppedSignature: (base64Png, slug) => call("save_cropped_signature", base64Png, slug),
       getDocumentSetSettings: () => call("get_document_set_settings"),
       saveDocumentSetSettings: (selected) => call("save_document_set_settings", JSON.stringify(selected)),
       newCase: (stateObj) => call("new_case", JSON.stringify(stateObj)),
@@ -51,6 +53,7 @@ CCCD.bridgeReady = new Promise((resolve) => {
       onOcrFileResult: (fn) => raw.ocrFileResult.connect((target, json) => fn(target, JSON.parse(json))),
       onOcrBatchFinished: (fn) => raw.ocrBatchFinished.connect((target, json) => fn(target, JSON.parse(json))),
       onOcrBatchFailed: (fn) => raw.ocrBatchFailed.connect(fn),
+      onGenerationFinished: (fn) => raw.generationFinished.connect((jobId, json) => fn(jobId, JSON.parse(json))),
     };
     resolve(CCCD.bridge);
   });

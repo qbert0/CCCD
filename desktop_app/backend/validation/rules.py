@@ -58,7 +58,6 @@ LABELS = {
     "staff_name": "Nhân viên giao dịch",
     "commitment_months": "Thời gian cam kết",
     "monthly_fee": "Cước cam kết tối thiểu",
-    "backup_phone_1": "Số điện thoại phối hợp giải quyết",
     "sim_serial": "Số sê-ri SIM",
     "activation_date": "Ngày hòa mạng",
     "service_point_name": "Điểm cung cấp dịch vụ viễn thông",

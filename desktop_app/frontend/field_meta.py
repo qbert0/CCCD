@@ -135,8 +135,6 @@ DOCUMENT_FIELD_META: dict[str, FieldMeta] = {
     # 2 fields all now live directly in resolve_aftersale_form_rows()'s fixed
     # row order.
     "other_attachment": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.LONG),
-    "backup_phone_1": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
-    "backup_phone_2": FieldMeta(FieldSource.DOCUMENT, FieldTier.PRIMARY, FieldWidth.SHORT),
     "shop_id_number": FieldMeta(FieldSource.SHOP, FieldTier.PRIMARY, FieldWidth.SHORT),
     "shop_issue_date": FieldMeta(FieldSource.SHOP, FieldTier.PRIMARY, FieldWidth.SHORT),
     "shop_issue_place": FieldMeta(FieldSource.SHOP, FieldTier.PRIMARY, FieldWidth.SHORT),

@@ -12,7 +12,14 @@ LABELS = {
     "nationality": ("quốc tịch", "quoc tich", "nationality"),
     "hometown": ("quê quán", "que quan", "place of origin", "hometown"),
     "address": ("nơi thường trú", "noi thuong tru", "place of residence", "address"),
-    "issue_date": ("ngày cấp", "ngay cap", "date of issue", "issue date"),
+    # "ngày cấp"/"date of issue" is the front-side label (organization
+    # documents); the back side's own issue-date line is instead labeled
+    # "Ngày, tháng, năm / Date, month, year" -- both are real printed labels
+    # for the same field, just on different sides of the card.
+    "issue_date": (
+        "ngày cấp", "ngay cap", "date of issue", "issue date",
+        "ngày, tháng, năm", "ngay, thang, nam", "date, month, year",
+    ),
     "issue_place": ("nơi cấp", "noi cap", "place of issue"),
     "expiry_date": ("có giá trị đến", "co gia tri den", "date of expiry", "expiry date"),
 }
@@ -152,10 +159,12 @@ def parse_ocr_text(raw: str) -> dict[str, str]:
         expiry_year = int(expiry[:2])
         expiry_full_year = 2000 + expiry_year if expiry_year < 70 else 1900 + expiry_year
         result["expiry_date"] = f"{expiry[4:6]}/{expiry[2:4]}/{expiry_full_year}"
-    if not result["issue_date"]:
-        issue_match = re.search(r"(?:date[^\d]{0,20})?(\d{2}/\d{2}/\d{4})", text, re.IGNORECASE)
-        if issue_match:
-            result["issue_date"] = issue_match.group(1)
+    # No fallback here on purpose: an unscoped "any DD/MM/YYYY in the whole
+    # text" search used to run when the "Ngày cấp" label itself wasn't
+    # matched, and would happily grab an unrelated date (e.g. date_of_birth)
+    # sitting elsewhere in the same OCR text. Leaving issue_date empty when
+    # the label truly wasn't found lets the existing required-field
+    # validation warn the user instead of silently filling in a wrong date.
     if result["id_number"]:
         result["issue_place"] = result["issue_place"] or "Cục Cảnh sát QLHC về TTXH"
     # Nationality is read the same way as any other same-line label value,

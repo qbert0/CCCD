@@ -590,7 +590,9 @@ class WebBridgeTest(unittest.TestCase):
             self.assertEqual(templates[service]["source_role"], "new_owner_123")
             self.assertEqual(templates[service]["required_images"], [1, 2, 3])
         for service in ("prepaid_transfer_individual", "commitment_transfer_individual"):
-            self.assertEqual(templates[service]["source_role"], "old_123_new_456")
+            # Swapped by explicit request: 1-3 is the new owner, 4-6 the
+            # old one (was "old_123_new_456", the reverse).
+            self.assertEqual(templates[service]["source_role"], "new_123_old_456")
             self.assertEqual(templates[service]["required_images"], [1, 2, 3, 4, 5, 6])
         self.assertEqual(templates["sim_replacement"]["source_role"], "requester_123")
 
@@ -698,7 +700,6 @@ class WebBridgeTest(unittest.TestCase):
             "address": "1 Xã Đàn, Hà Nội",
         }
         state["subscribers"] = [{"subscriber_number": "0925123456", "monthly_fee": "", "activation_date": "19/08/2026", "sim_serial": "8984041234567890001", "commitment_note": ""}]
-        state["backup_phone_1"] = "0901234567"
         state["shop_id_number"] = "0101234567"
         state["shop_issue_date"] = "01/01/2020"
         state["shop_issue_place"] = "Sở Tài chính Hà Nội"

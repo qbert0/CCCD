@@ -34,8 +34,8 @@ def resolve_aftersale_form_rows() -> dict:
 class AftersaleForm(BaseDocumentForm):
     def __init__(self, parent=None):
         super().__init__(parent)
-        # Packed into primary_grid below, alongside attachments_group and
-        # backup_phone_1, instead of each sitting alone on its own row.
+        # Packed into primary_grid below, alongside attachments_group,
+        # instead of each sitting alone on its own row.
         self.action_group = QWidget()
         action_layout = QVBoxLayout(self.action_group)
         action_layout.setContentsMargins(0, 0, 0, 0)

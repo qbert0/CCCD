@@ -12,7 +12,7 @@ from docx.dml.color import RGBColor
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Mm, Pt
+from docx.shared import Emu, Mm, Pt
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 from pypdf import PdfReader, PdfWriter
@@ -20,8 +20,10 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
+from PIL import Image
+
 from desktop_app.backend.documents.font_embed import SIGNATURE_FONT_NAME
-from desktop_app.backend.domain.models import DocumentType, ReportData
+from desktop_app.backend.domain.models import DocumentType, ReportData, ServiceTemplate
 
 
 # Keep empty choices as an outlined square, but use a real check mark for the
@@ -32,9 +34,11 @@ PDF_CHECKMARK = "✓"
 
 # The data-value placeholder font baked into each template's own runs by
 # scripts/apply_value_font.py -- shared here so a still-blank field
-# resolving to plain dots (see _is_blank_field_text below) can be
-# detected and switched back to an ordinary font instead of printing the
-# blank-line dots themselves in this heavier face.
+# resolving to plain dots (see _is_blank_field_text below) can be detected
+# and switched back to an ordinary font instead of printing the blank-line
+# dots themselves in this heavier face. By explicit request this reset is
+# skipped for sim_change_form specifically (see _replace_placeholders) --
+# every other template keeps it.
 VALUE_FONT_NAME = "JetBrainsMono NF ExtraBold"
 
 
@@ -113,10 +117,12 @@ def _is_blank_field_text(text: str) -> bool:
     genuinely filled-in value -- so a blank field's own filler can be kept
     looking like ordinary body text instead of the bold+bigger emphasis
     scripts/bake_field_highlighting.py bakes into every placeholder run for
-    a real, filled-in value. Two different blank conventions exist in this
-    file: _empty_field_placeholder's length-based "...." (plain periods)
-    and a handful of context values in _docx_context with their own
-    hardcoded "…………"-style ellipsis fallback -- both are just filler
+    a real, filled-in value (see _replace_placeholders; skipped for
+    sim_change_form), and to keep the sim_customer_email blue+underline
+    restyle off a still-blank email. Two different blank conventions exist
+    in this file: _empty_field_placeholder's length-based "...." (plain
+    periods) and a handful of context values in _docx_context with their
+    own hardcoded "…………"-style ellipsis fallback -- both are just filler
     characters, so both strip away to nothing here."""
     return not text.strip(". …")
 
@@ -134,7 +140,9 @@ def _given_name(full_name: str) -> str:
     return parts[-1] if parts else ""
 
 
-def _replace_placeholders(paragraph: Paragraph, context: dict[str, str]) -> None:
+def _replace_placeholders(
+    paragraph: Paragraph, context: dict[str, str], document_type: DocumentType,
+) -> None:
     """Replace tokens while retaining the formatting of the run where each starts.
 
     Word may split a token into several XML runs after a user edits the template.
@@ -145,12 +153,17 @@ def _replace_placeholders(paragraph: Paragraph, context: dict[str, str]) -> None
     decided here -- it's baked directly into each template's own placeholder
     runs (see scripts/bake_field_highlighting.py) as real, permanent
     template content, so this function mostly just substitutes text and
-    keeps whatever formatting was already there. Two narrow exceptions,
-    both keyed off the actual resolved value rather than the field name:
+    keeps whatever formatting was already there. Narrow exceptions:
     a still-blank field's own dots get de-emphasized back to plain text
     (see _is_blank_field_text) since the baked bold+bigger styling was
-    meant for a real value, not its own placeholder; a Great Vibes
-    signature run gets title-cased (see SIGNATURE_FONT_NAME below).
+    meant for a real value, not its own placeholder -- EXCEPT in
+    sim_change_form, where this whole document's placeholder fonts are by
+    explicit request left exactly as baked, blank or not, with only
+    sim_customer_email exempted from that (see below); a Great Vibes
+    signature run gets title-cased (see SIGNATURE_FONT_NAME below); and
+    sim_customer_email is restyled blue+underlined instead of bold (see
+    the name == "sim_customer_email" check below), keyed off the field
+    name itself rather than the resolved value.
     """
     runs = paragraph.runs
     joined = "".join(run.text for run in runs)
@@ -189,7 +202,28 @@ def _replace_placeholders(paragraph: Paragraph, context: dict[str, str]) -> None
             # the exact same value used elsewhere (e.g. a plain-prose
             # mention of the same person) is untouched.
             replacement = replacement.title()
-        if _is_blank_field_text(replacement):
+        if name == "sim_customer_email" and not _is_blank_field_text(replacement):
+            # Explicit request: the email must read as a plain address in
+            # the same blue/underlined style as the real
+            # "cskh@vietnamobile.com.vn" contact line baked into the
+            # prepaid_contract template (color 0000FF, single blue
+            # underline) -- not the heavy bold data-value font every
+            # other filled field gets.
+            target = runs[start_run]
+            target.font.name = "Times New Roman"
+            target.font.bold = False
+            target.font.color.rgb = RGBColor(0x00, 0x00, 0xFF)
+            r_pr = target._r.get_or_add_rPr()
+            fonts = r_pr.get_or_add_rFonts()
+            for key in ("ascii", "hAnsi", "eastAsia", "cs"):
+                fonts.set(qn(f"w:{key}"), "Times New Roman")
+            underline = r_pr.find(qn("w:u"))
+            if underline is None:
+                underline = OxmlElement("w:u")
+                r_pr.append(underline)
+            underline.set(qn("w:val"), "single")
+            underline.set(qn("w:color"), "0000FF")
+        if _is_blank_field_text(replacement) and document_type != DocumentType.SIM_CHANGE_FORM:
             if runs[start_run].font.name == VALUE_FONT_NAME:
                 # A still-blank field's own dots printed in the data-value
                 # font (scripts/apply_value_font.py) read like JetBrains
@@ -348,6 +382,24 @@ SIGNATURE_IMAGE_SLOTS = (
 )
 SIGNATURE_IMAGE_HEIGHT = Mm(32)  # doubled from the original Mm(16) per direct instruction; the x1.5 bump to 48 was reverted as too large
 
+# The fixed crop rectangle the signature-upload UI now crops every image
+# into before it ever reaches this module (see web_bridge's
+# save_cropped_signature) -- 58mm fits every real signature slot's own
+# <w:tcW> across all 5 templates with room to spare, the tightest being
+# aftersale's 3-signatures-in-one-row layout (61.7mm/cell, 58mm leaves
+# 3.7mm) -- confirmed against real measured cell widths, not guessed.
+# Deliberately its own constant rather than reusing SIGNATURE_IMAGE_HEIGHT
+# (32mm) for the height: that constant is the *other* session's own
+# visually-tuned value for the aspect-preserving fallback fit just below
+# (used only for a signature file that predates this crop step), a
+# different purpose that shouldn't silently move just because this one
+# changed. zero_signature_cell_margins.py (desktop_app/scripts/) strips
+# each of these cells' own tcMar to 0 on all sides -- matched here so the
+# UI's crop-tool math sees exactly what the template will actually give
+# the image, no invisible cell padding eating into the fit.
+SIGNATURE_FORM_WIDTH = Mm(58)
+SIGNATURE_FORM_HEIGHT = Mm(36)
+
 # "Người đại diện" (representative_profile) has no dedicated ký-tên/họ-tên
 # signature block anywhere in prepaid_contract -- its name only appears
 # inline, sharing a paragraph with static label text ("Người đại
@@ -364,11 +416,37 @@ def _resolve_path_attr(data: ReportData, dotted_attr: str) -> str:
     return str(value or "")
 
 
+def _signature_image_size(image_path: str) -> tuple[Emu, Emu]:
+    """Fit `image_path` inside the (SIGNATURE_FORM_WIDTH, SIGNATURE_FORM_HEIGHT)
+    box, preserving its own aspect ratio. Every signature uploaded through
+    the crop tool (SignatureCropModal, js/components.js) already IS that
+    exact box, so this resolves to that same size unchanged for the common
+    case -- it only actually reshapes anything for a file that predates
+    the crop tool (an old upload still sitting in Settings, not yet
+    replaced). 58x36mm already fits every real signature slot's own cell
+    with room to spare (see SIGNATURE_FORM_WIDTH's own note), so unlike
+    before this no longer needs to measure the containing table cell at
+    all -- one fixed target box for every slot, everywhere."""
+    with Image.open(image_path) as image:
+        source_width, source_height = image.size
+    if source_width <= 0 or source_height <= 0:
+        return SIGNATURE_FORM_WIDTH, SIGNATURE_FORM_HEIGHT
+
+    aspect_ratio = source_width / source_height
+    max_width, max_height = int(SIGNATURE_FORM_WIDTH), int(SIGNATURE_FORM_HEIGHT)
+    width, height = max_width, int(max_width / aspect_ratio)
+    if height > max_height:
+        height = max_height
+        width = int(max_height * aspect_ratio)
+    return Emu(width), Emu(height)
+
+
 def _insert_signature_image(paragraph: Paragraph, image_path: str) -> None:
     for run in list(paragraph.runs):
         run.text = ""
     run = paragraph.runs[0] if paragraph.runs else paragraph.add_run()
-    run.add_picture(image_path, height=SIGNATURE_IMAGE_HEIGHT)
+    width, height = _signature_image_size(image_path)
+    run.add_picture(image_path, width=width, height=height)
 
 
 def _clear_paragraph_text(paragraph: Paragraph) -> None:
@@ -416,6 +494,27 @@ def _apply_signature_images(paragraphs: list[Paragraph], data: ReportData) -> No
                 _clear_paragraph_text(paragraph)
 
 
+def dotted(value: str, length: int = 20) -> str:
+    text = str(value or "").strip()
+    return text if text else "." * length
+
+
+# Which of the 4 ServiceTemplate values counts as "sim cam kết" (a
+# committed/postpaid-style prepaid transfer) vs "sim trả trước" (a plain
+# prepaid transfer) -- shared between _docx_context and _prepaid_commands
+# since prepaid_contract renders through both (the .docx template's own
+# placeholders, and a fixed-layout PDF overlay for its PDF variant) and
+# both need to agree on which fields the shop actually fills for each.
+_COMMITMENT_TRANSFER_TEMPLATES = {
+    ServiceTemplate.COMMITMENT_TRANSFER_INDIVIDUAL.value,
+    ServiceTemplate.COMMITMENT_TRANSFER_ORG.value,
+}
+
+
+def _is_commitment_transfer(data: ReportData) -> bool:
+    return data.service_template in _COMMITMENT_TRANSFER_TEMPLATES
+
+
 def _docx_context(data: ReportData) -> dict[str, str]:
     customer, new_owner = data.customer, data.new_owner
     prepaid_structured = (
@@ -430,8 +529,13 @@ def _docx_context(data: ReportData) -> dict[str, str]:
     def authorization(person) -> str:
         return " - ".join(value for value in (person.authorization_number, person.authorization_date) if value)
 
-    def organization(value: str) -> str:
-        return value if prepaid_structured or is_organization else ""
+    def organization(_value: str) -> str:
+        # hợp đồng cung cấp (prepaid_contract) only ever needs the
+        # individual customer's own info -- by explicit request, company
+        # info is never filled here regardless of prepaid_structured/
+        # is_organization, always left as dots for the shop to fill by
+        # hand if the actual customer happens to be an organization.
+        return "." * 20
 
     def individual(value: str) -> str:
         return value if prepaid_structured or not is_organization else ""
@@ -439,29 +543,19 @@ def _docx_context(data: ReportData) -> dict[str, str]:
     def party_organization(person, value: str) -> str:
         return value if person.entity_type == "Tổ chức" else ""
 
-    def dotted(value: str, length: int = 20) -> str:
-        text = str(value or "").strip()
-        return text if text else "." * length
-
     def action_value(action: str, value: str, length: int = 20) -> str:
         return dotted(value, length) if data.service_action == action else "." * length
 
     def choice_mark(selected: bool) -> str:
         return CHECKED_BOX if selected else EMPTY_BOX
 
-    # Up to 3 ordered organization contact numbers, joined into the single
-    # "Điện thoại: ..." slot every template already has -- shop_phone_2/3
-    # simply don't add anything to the line when left blank.
-    organization_phones = " - ".join(
-        value for value in (data.shop_phone, data.shop_phone_2, data.shop_phone_3) if value
-    )
     # The mẫu (ServiceTemplate) workflow's canonical subscriber list, joined
     # into one string -- Transfer and Aftersale each only ever had room for
     # ONE number's worth of prose per blank, so "gộp chung khi có thể" for
-    # them means joining every number into that same blank (same idea as
-    # organization_phones above), not inserting a table (Aftersale has none)
-    # or cloning prose paragraphs. Falls back to the legacy scalar field
-    # when the list is empty, so old saved cases/tests render identically.
+    # them means joining every number into that same blank, not inserting a
+    # table (Aftersale has none) or cloning prose paragraphs. Falls back to
+    # the legacy scalar field when the list is empty, so old saved
+    # cases/tests render identically.
     subscriber_numbers_joined = (
         ", ".join(
             str(row.get("subscriber_number", "")).strip()
@@ -516,8 +610,14 @@ def _docx_context(data: ReportData) -> dict[str, str]:
         "aftersale_customer_address": dotted(
             customer.headquarters_address if is_organization else customer.address, 48
         ),
+        # Falls back to the shop's own default contact number when the
+        # customer has no phone on file at all -- explicit request, a
+        # fixed literal rather than looking up the shop's own saved
+        # phone/phone_2 dynamically.
         "aftersale_customer_phone": dotted(
-            " - ".join(value for value in (customer.phone, customer.phone_2) if value), 24
+            " - ".join(value for value in (customer.phone, customer.phone_2) if value)
+            or "0777360777",
+            24,
         ),
         "aftersale_representative_name": dotted(data.provider_representative, 30),
         # The 3 aftersale signature-table names. "Người yêu cầu" is
@@ -561,7 +661,10 @@ def _docx_context(data: ReportData) -> dict[str, str]:
         "requester_role_mark": choice_mark(data.service_action != "Chuyển chủ quyền"),
         "new_owner_role_mark": choice_mark(data.service_action == "Chuyển chủ quyền"),
         "common_subscriber_number": dotted(subscriber_numbers_joined, 24),
-        "backup_phone_1_line": dotted(data.backup_phone_1 or customer.phone, 20),
+        # By explicit request, both backup contact lines in the aftersale
+        # commitment clause are the company's own numbers (Thiết lập mặc
+        # định's shop_phone/shop_phone_2), not something typed per case.
+        "backup_phone_1_line": dotted(data.shop_phone, 20),
         "backup_phone_2_line": dotted(data.shop_phone_2, 20),
         "aftersale_staff_name": dotted(data.staff_name, 24),
         "document_day": f" {day}",
@@ -585,8 +688,10 @@ def _docx_context(data: ReportData) -> dict[str, str]:
         "transfer_effective_month": effective_month,
         "transfer_effective_year": effective_year,
         "shop_name": data.shop_name,
-        "shop_address": data.provider_unit_address if prepaid_structured else data.shop_address,
-        "shop_phone": data.service_point_phone if prepaid_structured else organization_phones,
+        # hợp đồng cung cấp never fills the shop's own address/phone here --
+        # by explicit request, left as dots for the shop to fill by hand.
+        "shop_address": "." * 42,
+        "shop_phone": "." * 20,
         "customer_signature_name": customer.display_name().upper(),
         "customer_representative_signature_name": (
             customer.full_name or customer.representative_name
@@ -638,21 +743,60 @@ def _docx_context(data: ReportData) -> dict[str, str]:
             f"năm {effective_year} (“Thời điểm Chuyển quyền”)."
         ),
         "contract_number": data.contract_number,
-        "subscriber_code": data.subscriber_code or data.subscriber_number,
+        # Mã thuê bao: never filled in hợp đồng cung cấp -- explicit request.
+        "subscriber_code": "." * 20,
         "sim_serial": data.sim_serial,
         "activation_date": data.activation_date,
-        "service_point_name": data.service_point_name,
-        "provider_representative": data.provider_representative,
+        # Điểm cung cấp dịch vụ viễn thông: only for "sim cam kết" (a
+        # COMMITMENT_TRANSFER_* service_template) -- the other 2 templates
+        # ("sim trả trước", PREPAID_TRANSFER_*) leave this as dots too.
+        "service_point_name": data.service_point_name if _is_commitment_transfer(data) else "." * 20,
+        # "Người đại diện: ... Chức vụ: ..." (Bên B's info line): never
+        # filled in hợp đồng cung cấp specifically -- explicit request,
+        # left as dots. This key is shared with beautiful_number,
+        # sim_change_form, and transfer too (confirmed via each module's
+        # own placeholders set), which still get the real value.
+        "provider_representative": (
+            "." * 20 if data.document_type == DocumentType.PREPAID_CONTRACT
+            else data.provider_representative
+        ),
         # Same value as above, own key -- reserved for the Great Vibes
         # signature-block cell specifically (see SIGNATURE_IMAGE_SLOTS),
         # kept separate from the plain-info "provider_representative"
-        # mention above so an image can never land on the wrong one.
+        # mention above so an image can never land on the wrong one. NOT
+        # blanked for prepaid_contract -- the user only asked about the
+        # plain info line, not the actual signature block elsewhere in
+        # the document.
         "provider_representative_signature": data.provider_representative,
-        "provider_position": data.provider_position,
+        "provider_position": (
+            "." * 12 if data.document_type == DocumentType.PREPAID_CONTRACT
+            else data.provider_position
+        ),
         "provider_phone": data.provider_phone,
         "provider_email": data.provider_email,
-        "registration_time": data.registration_time,
-        "staff_name": data.staff_name.upper(),
+        # hợp đồng cung cấp never fills its own "Thời gian thực hiện đăng
+        # ký" here -- by explicit request, left as dots.
+        "registration_time": "." * 20,
+        # Họ tên nhân viên giao dịch: same "sim cam kết" only rule as
+        # service_point_name above.
+        "staff_name": data.staff_name.upper() if _is_commitment_transfer(data) else "." * 20,
+        # The template's "Tên cơ quan, tổ chức hoặc cá nhân" (organization)
+        # block used to share these exact same tokens with the "Người đại
+        # diện/ủy quyền" (representative) block below -- one dict value
+        # can't be both always-blank and "fill when available" at once, so
+        # scripts/split_sim_customer_org_placeholders.py renamed the
+        # organization block's own occurrences to sim_customer_org_*.
+        # Explicit request: that block never gets filled in dịch vụ thay
+        # SIM, always dots.
+        "sim_customer_org_name": "." * 28,
+        "sim_customer_org_id_number": "." * 16,
+        "sim_customer_org_issue_date": "." * 12,
+        "sim_customer_org_issue_place": "." * 26,
+        "sim_customer_org_address": "." * 36,
+        # The representative block (and the "Nơi gửi thông báo cước" line,
+        # which reuses this same address token) -- explicit request: fill
+        # with the real customer data when available, unlike the
+        # organization block above.
         "sim_customer_name": customer.display_name().upper(),
         "sim_customer_birth_date": customer.date_of_birth,
         "sim_customer_gender": customer.gender,
@@ -664,10 +808,11 @@ def _docx_context(data: ReportData) -> dict[str, str]:
         # Unlike the other customer fields on this row, this is the shop's
         # OWN contact number (data.shop_phone, already auto-defaulted for
         # every mẫu from the saved company profile) -- not something the
-        # clerk types in per case. Giới tính/Email have no UI input at all
-        # and are left to render as their template's own blank line.
+        # clerk types in per case. Giới tính has no UI input at all and is
+        # left to render as the template's own blank line.
         "sim_customer_phone": data.shop_phone,
-        "sim_customer_email": customer.email,
+        # Fixed by explicit request, not customer.email.
+        "sim_customer_email": "tienx5pro@gmail.com",
         "sim_subscriber_number": subscriber_numbers_joined,
         # For SIM replacement the shared subscriber editor's serial is the
         # NEW card serial. This keeps that editor identical for all services.
@@ -999,7 +1144,7 @@ def _generate_docx(
 
     context = _docx_context(data)
     for paragraph in template_paragraphs:
-        _replace_placeholders(paragraph, context)
+        _replace_placeholders(paragraph, context, data.document_type)
         _style_docx_checkbox_symbols(paragraph)
 
     if data.document_type == DocumentType.PREPAID_CONTRACT:
@@ -1222,15 +1367,17 @@ def _prepaid_commands(data: ReportData) -> dict[int, list[tuple]]:
     individual_customer = data.new_owner if structured else customer
     is_organization = customer.entity_type == "Tổ chức"
 
-    def organization(value: str) -> str:
-        return value if structured or is_organization else ""
+    def organization(_value: str) -> str:
+        # Same "hợp đồng cung cấp never fills company info" rule as
+        # _docx_context's own organization() -- "" (not dots) is correct
+        # here: this overlays text onto a fixed pre-printed PDF template
+        # whose own dotted blank lines are already part of the page, so
+        # drawing nothing leaves them showing through untouched.
+        return ""
 
     def individual(value: str) -> str:
         return value if structured or not is_organization else ""
 
-    organization_phones = " - ".join(
-        value for value in (data.shop_phone, data.shop_phone_2, data.shop_phone_3) if value
-    )
     sim_commands: list[tuple] = []
     for index, row in enumerate(_prepaid_rows(data)):
         top = 202 + index * 14.5
@@ -1243,7 +1390,8 @@ def _prepaid_commands(data: ReportData) -> dict[int, list[tuple]]:
     return {
         0: [
             (520, 58, data.contract_number, 7.5, 70, 1),
-            (510, 73, data.subscriber_code or data.subscriber_number, 7.5, 80, 1),
+            # Mã thuê bao: never filled in hợp đồng cung cấp -- explicit request.
+            (510, 73, "", 7.5, 80, 1),
             (465, 173, data.document_date, 8, 110, 1),
             (265, 215, organization(customer.organization_name.upper()), 7.5, 300, 1),
             (165, 229, organization(customer.headquarters_address), 7.5, 395, 1),
@@ -1273,16 +1421,26 @@ def _prepaid_commands(data: ReportData) -> dict[int, list[tuple]]:
             # Draw a large tick over the checkbox already present in the PDF.
             (98, 458, individual(PDF_CHECKMARK) if individual_customer.nationality.casefold() == "việt nam" else "", 13, 16, 1),
             (390, 461, individual(individual_customer.foreign_country), 7.5, 165, 1),
-            (80, 545, data.provider_unit_address if structured else data.shop_address, 7.5, 470, 1),
-            (115, 559, data.provider_representative, 7.5, 250, 1),
-            (470, 559, data.provider_position, 7.5, 90, 1),
-            (200, 614, data.service_point_name, 7.5, 350, 1),
-            (155, 628, data.staff_name, 7.5, 350, 1),
+            # shop_address/shop_phone: never filled in hợp đồng cung cấp --
+            # explicit request, left as the PDF template's own dotted line.
+            (80, 545, "", 7.5, 470, 1),
+            # "Người đại diện" / "Chức vụ" info line: never filled in hợp
+            # đồng cung cấp -- explicit request, same as _docx_context's
+            # own "provider_representative"/"provider_position" (this
+            # function is prepaid_contract-exclusive already, so no
+            # document_type check needed here).
+            (115, 559, "", 7.5, 250, 1),
+            (470, 559, "", 7.5, 90, 1),
+            # Điểm cung cấp dịch vụ viễn thông / Họ tên nhân viên giao dịch:
+            # only for "sim cam kết" (COMMITMENT_TRANSFER_*) -- same rule as
+            # _docx_context's own service_point_name/staff_name.
+            (200, 614, data.service_point_name if _is_commitment_transfer(data) else "", 7.5, 350, 1),
+            (155, 628, data.staff_name if _is_commitment_transfer(data) else "", 7.5, 350, 1),
         ],
         1: [
-            (150, 56, data.service_point_address if structured else data.shop_address, 7.5, 410, 1),
-            (195, 70, data.service_point_phone if structured else organization_phones, 7.5, 365, 1),
-            (255, 84, data.registration_time, 7.5, 300, 1),
+            (150, 56, "", 7.5, 410, 1),
+            (195, 70, "", 7.5, 365, 1),
+            (255, 84, "", 7.5, 300, 1),
             *sim_commands,
             (80, 690, (individual_customer if structured else customer).display_name().upper(), 8.5, 190, 1),
         ],

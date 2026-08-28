@@ -37,6 +37,16 @@ Name: "desktopicon"; Description: "Tạo biểu tượng trên màn hình nền"
 
 [Files]
 Source: "..\..\..\product\CCCDReport\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Custom fonts baked into the docx templates (see scripts/apply_signature_font.py,
+; scripts/apply_value_font.py) render correctly in the app's own preview inside a
+; real Word/LibreOffice install, but the bundled LibreOffice's headless PDF export
+; (used to turn each generated .docx into the JPGs this app actually ships) only
+; picks up fonts genuinely registered with Windows -- an embedded-in-the-docx font
+; is silently substituted otherwise (confirmed directly: pdffonts on the exported
+; PDF showed neither font at all before this, a generic serif in their place).
+; Installing them for real here is what fixes that.
+Source: "..\..\..\desktop_app\data\source\fonts\GreatVibes-Regular.ttf"; DestDir: "{autofonts}"; FontInstall: "Great Vibes"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "..\..\..\desktop_app\data\source\fonts\JetBrainsMonoNFExtraBold-Regular.ttf"; DestDir: "{autofonts}"; FontInstall: "JetBrainsMono NF ExtraBold"; Flags: onlyifdoesntexist uninsneveruninstall
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

@@ -302,6 +302,34 @@
   border-radius: var(--radius-md);
   background: var(--color-canvas-soft);
 }
+.signature-crop__hint {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+.signature-crop__viewport {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--color-hairline-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-canvas-soft);
+  cursor: grab;
+  touch-action: none;
+  align-self: center;
+}
+.signature-crop__viewport:active { cursor: grabbing; }
+.signature-crop__image {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: none;
+  user-select: none;
+  pointer-events: none;
+}
+.signature-crop__zoom {
+  width: 100%;
+  align-self: center;
+}
 .icon-button {
   display: inline-grid;
   place-items: center;
@@ -1003,13 +1031,12 @@ dialog.modal::backdrop {
    QtWebEngine 5.15's bundled Chromium (~87): a <dialog> shown via
    showModal() runs in the browser's "top layer", and that engine's box
    model for it doesn't consistently honor an author-set flex/height the
-   way an ordinary block element does -- confirmed by testing on a real
-   Windows build (not a hypothesis): this exact pattern also broke the
-   simpler two-tab profile dialog earlier in this project, and switching
-   *that* dialog off the same pattern fixed it there too.
-   Fix: give the <dialog> itself no special sizing at all (just width, via
-   the base `dialog.modal` rule plus the width override below) and let it
-   shrink-wrap around one plain, ordinary <div class="settings-shell">
+   way an ordinary block element does -- confirmed on a real Windows
+   build, not a hypothesis (this exact pattern also broke the simpler
+   two-tab profile dialog earlier in this project; switching *that* one
+   off the same pattern fixed it there too).
+   Fix: give the <dialog> itself no special sizing at all (just width) and
+   let it shrink-wrap around one plain, ordinary <div class="settings-shell">
    child -- flex-direction:column + a fixed height on a normal block
    element is unremarkable, well-supported CSS, unlike doing the same
    directly on <dialog>. */
@@ -1021,11 +1048,14 @@ dialog.modal--settings {
 .settings-shell {
   display: flex;
   flex-direction: column;
-  /* Same reasoning the earlier (now-removed) dialog-level rule had: a
-     fixed height computed against the app's normal 1400x900 window (see
+  /* Fixed height computed against the app's normal 1400x900 window (see
      WebHomePage.resize in web_home_page.py), not a vh percentage that
      recalculates against whatever the viewport happens to be -- only
-     shrinks below 720px on a genuinely smaller viewport. */
+     shrinks below 720px on a genuinely smaller viewport. .settings-layout
+     (the only variable-height part below) always gets exactly "whatever's
+     left" after the fixed header/footer chrome and scrolls internally for
+     anything past that -- the popup's outer size never changes between
+     tabs, short or long. */
   height: min(720px, 90vh);
 }
 .settings-header {

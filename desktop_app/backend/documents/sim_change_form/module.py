@@ -15,6 +15,8 @@ class SimChangeFormDocumentModule(BaseDocumentModule):
         "sim_customer_nationality", "sim_customer_id_number", "sim_customer_issue_date",
         "sim_customer_issue_place", "sim_customer_address", "sim_customer_phone",
         "sim_customer_email", "sim_subscriber_number", "sim_new_serial", "sim_current_serial",
+        "sim_customer_org_name", "sim_customer_org_id_number", "sim_customer_org_issue_date",
+        "sim_customer_org_issue_place", "sim_customer_org_address",
         "sim_reason_lost_mark", "sim_reason_damaged_mark", "sim_reason_other_mark",
         "sim_reason_other_value", "sim_request_day", "sim_request_month", "sim_request_year",
         "sim_request_date_line", "sim_document_date_line",

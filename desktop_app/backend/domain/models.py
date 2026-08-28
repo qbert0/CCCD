@@ -230,8 +230,6 @@ class ReportData:
     remaining_validity: str = ""
     account_balance: str = ""
     last_changed_service: str = ""
-    backup_phone_1: str = ""
-    backup_phone_2: str = ""
     commitment_months: str = "12"
     monthly_fee: str = ""
     # Beautiful Number's own repeating subscriber-number table. Row 1's

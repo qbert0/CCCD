@@ -85,7 +85,6 @@ class ServiceTemplateTest(unittest.TestCase):
             ],
             payment_method="Trả trước",
             transfer_effective_date="19/08/2026",
-            backup_phone_1="0901234567",
             shop_id_number="0101234567",
             shop_issue_date="01/01/2020",
             shop_issue_place="Sở Tài chính Hà Nội",

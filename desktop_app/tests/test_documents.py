@@ -74,7 +74,6 @@ class DocumentTest(unittest.TestCase):
             shop_issue_date="01/01/2020",
             shop_issue_place="Sở Tài chính Hà Nội",
             staff_name="Nguyễn Giao Dịch",
-            backup_phone_1="0901234567",
             service_point_name="Điểm giao dịch Xã Đàn",
             registration_time="09:30 ngày 11/08/2026",
             commitment_months="12 tháng",
@@ -173,7 +172,10 @@ class DocumentTest(unittest.TestCase):
             self.assertEqual(text.count("001099999999"), 1)
             self.assertIn("NGUYỄN VĂN AN", text)
             self.assertIn("8984041234567890123", text)
-            self.assertIn("Điểm giao dịch Xã Đàn", text)
+            # service_point_name only fills for a "sim cam kết"
+            # (COMMITMENT_TRANSFER_*) service_template -- unset here
+            # (default fixture), same as the plain "sim trả trước" flow.
+            self.assertNotIn("Điểm giao dịch Xã Đàn", text)
             self.assertNotIn("{{", text)
 
     def test_prepaid_template_accepts_an_intentionally_removed_placeholder(self):
@@ -306,6 +308,33 @@ class DocumentTest(unittest.TestCase):
             self.assertIn("9999999999", text)
             self.assertIn("Địa chỉ chủ cũ", text)
             self.assertNotIn("0101234567", text)
+
+    def test_sim_change_form_org_block_stays_blank_while_representative_block_fills(self):
+        # The template's "Tên cơ quan, tổ chức hoặc cá nhân" (organization)
+        # block and its "Người đại diện/ủy quyền" (representative) block used
+        # to share the exact same {{ sim_customer_name }}/{{ sim_customer_
+        # address }}/{{ sim_customer_id_number }}/{{ sim_customer_issue_place
+        # }}/{{ sim_customer_issue_date }} tokens -- explicit request: the
+        # organization block must always stay blank, but the representative
+        # block (and the "Nơi gửi thông báo cước" line, which reuses the same
+        # address token) must print the real customer data when available.
+        with tempfile.TemporaryDirectory() as folder:
+            data = self.report(DocumentType.SIM_CHANGE_FORM)
+            output = self.registry.for_data(data).generate(data, Path(folder))
+            text = docx_text(output)
+            self.assertIn("NGUYỄN VĂN AN", text)
+            self.assertIn("001099999999", text)
+            self.assertIn("123 Đường Láng, Đống Đa, Hà Nội", text)
+            self.assertIn("Cục Cảnh sát QLHC về TTXH", text)
+            # The organization block's own (renamed) placeholders never get
+            # the customer's data -- only the representative block does.
+            document = Document(str(output))
+            org_paragraph = next(
+                p for p in document.tables[0].rows[1].cells[0].paragraphs
+                if p.text.startswith("Tên cơ quan, tổ chức hoặc cá nhân")
+            )
+            self.assertNotIn("NGUYỄN VĂN AN", org_paragraph.text)
+            self.assertNotIn("{{", text)
 
     def test_transfer_and_prepaid_print_the_actual_provider_representative(self):
         # Bên B's signature name used to be a literal "VÕ DUY NHẬT" baked
@@ -521,7 +550,6 @@ class DocumentTest(unittest.TestCase):
             data = self.report(DocumentType.AFTERSALE)
             data.service_action = "Chuyển chủ quyền"
             data.shop_phone_2 = "0987000111"
-            data.backup_phone_2 = "0900000000"  # legacy field must no longer win
             output = self.registry.for_data(data).generate(data, Path(folder))
             text = docx_text(output)
             self.assertIn("☑ Chuyển chủ quyền", text)
@@ -621,7 +649,11 @@ class DocumentTest(unittest.TestCase):
             self.assertEqual(spacing.get(qn("w:lineRule")), "auto")
             self.assertEqual(paragraph._p.pPr.find(qn("w:jc")).get(qn("w:val")), "both")
 
-    def test_prepaid_organization_fills_only_organization_section(self):
+    def test_prepaid_never_fills_organization_section(self):
+        # hợp đồng cung cấp only ever needs the individual customer's own
+        # info -- explicit request, regardless of the actual customer's
+        # entity_type. Company info is always left as dots for the shop to
+        # fill by hand if this particular customer really is a "Tổ chức".
         with tempfile.TemporaryDirectory() as folder:
             data = self.report(DocumentType.PREPAID_CONTRACT)
             data.customer = PersonData(
@@ -641,10 +673,10 @@ class DocumentTest(unittest.TestCase):
             )
             output = self.registry.for_data(data).generate(data, Path(folder))
             text = docx_text(output)
-            self.assertIn("CÔNG TY TNHH VIỄN THÔNG MẪU", text)
-            self.assertIn("NGUYỄN ĐẠI DIỆN", text)
+            self.assertNotIn("CÔNG TY TNHH VIỄN THÔNG MẪU", text)
+            self.assertNotIn("NGUYỄN ĐẠI DIỆN", text)
 
-    def test_structured_prepaid_renders_company_representative_customer_and_sim_rows(self):
+    def test_structured_prepaid_renders_individual_customer_and_sim_rows_not_company(self):
         with tempfile.TemporaryDirectory() as folder:
             data = self.report(DocumentType.PREPAID_CONTRACT)
             data.prepaid_structured_parties = True
@@ -681,19 +713,27 @@ class DocumentTest(unittest.TestCase):
             self.assertEqual(errors, [])
             output = self.registry.for_data(data).generate(data, Path(folder))
             text = docx_text(output)
-            self.assertIn("CÔNG TY KHÁCH HÀNG", text)
-            self.assertIn("LÊ NGƯỜI ĐẠI DIỆN", text)
+            # hợp đồng cung cấp never fills company/representative/
+            # shop_address info -- explicit request, even in structured
+            # (org -> individual) mode.
+            self.assertNotIn("CÔNG TY KHÁCH HÀNG", text)
+            self.assertNotIn("LÊ NGƯỜI ĐẠI DIỆN", text)
+            self.assertNotIn("Địa chỉ đơn vị cung cấp", text)
             self.assertIn("TRẦN KHÁCH HÀNG", text)
-            self.assertIn("Địa chỉ đơn vị cung cấp", text)
+            # service_point_address (via _replace_service_point_address, a
+            # separate placeholder from shop_address) is untouched by this
+            # change and still fills normally.
             self.assertIn("Địa điểm giao dịch riêng", text)
             self.assertIn("8984041111111111111", text)
             self.assertIn("8984042222222222222", text)
             self.assertIn("8984043333333333333", text)
-            self.assertEqual(text.count("001090001234"), 1)
+            # 001090001234 is the representative's own id_number -- only
+            # ever printed in the (now always-blank) organization section.
+            self.assertEqual(text.count("001090001234"), 0)
             self.assertNotIn("NGUYỄN VĂN AN", text)
             self.assertNotIn("{{", text)
 
-    def test_prepaid_shop_phone_is_dynamic_and_provider_contacts_stay_internal(self):
+    def test_prepaid_shop_phone_is_never_filled_and_provider_contacts_stay_internal(self):
         with tempfile.TemporaryDirectory() as folder:
             data = self.report(DocumentType.PREPAID_CONTRACT)
             data.provider_phone = "0909888777"
@@ -703,13 +743,13 @@ class DocumentTest(unittest.TestCase):
             text = docx_text(output)
             self.assertNotIn("0909888777", text)
             self.assertNotIn("daidien@example.com", text)
-            # The newly saved template keeps the provider hotline fixed and
-            # uses the dynamic phone placeholder for the service point.
+            # The template's own fixed Vietnamobile hotline is static text,
+            # unrelated to any of these fields.
             self.assertIn("Điện thoại: (024) 35730123", text)
-            self.assertIn(
-                "Số điện thoại của điểm giao dịch: 02435730123 - 0987000111",
-                text,
-            )
+            # shop_phone: never filled in hợp đồng cung cấp -- explicit
+            # request, always dots regardless of shop_phone/shop_phone_2.
+            self.assertNotIn("02435730123 - 0987000111", text)
+            self.assertNotIn("Số điện thoại của điểm giao dịch: 02435730123", text)
 
     def test_prepaid_foreign_person_prints_passport_country(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -731,7 +771,9 @@ class DocumentTest(unittest.TestCase):
         last = paragraph.add_run("name }} / giữ nguyên")
         last.underline = True
 
-        _replace_placeholders(paragraph, {"customer_name": "NGUYỄN VĂN AN"})
+        _replace_placeholders(
+            paragraph, {"customer_name": "NGUYỄN VĂN AN"}, DocumentType.TRANSFER,
+        )
 
         # _replace_placeholders only substitutes text now -- bold/size/dots
         # are baked directly into each template's own placeholder runs

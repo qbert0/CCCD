@@ -122,7 +122,7 @@ class PaddleEngine(BaseOCREngine):
         # dependency's bare-name imports (e.g. torch_cpu.dll importing
         # "libiomp5md.dll") against whatever module of that name is already
         # resident in the process before searching any directory, so
-        # whichever package's copy loads first "wins" process-wide -- with
+        # whichever package's copy loads first wins process-wide -- with
         # paddleocr imported first, torch's own later attempt to load
         # shm.dll (which needs torch_cpu.dll, which needs those two
         # exports) fails with "WinError 127: The specified procedure could
