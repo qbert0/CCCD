@@ -99,6 +99,41 @@ a = Analysis(
     excludes=["tensorflow", "ultralytics", "PySide6"],
     noarchive=False,
 )
+
+if sys.platform == "win32":
+    # PyQt5's Qt5 SDK build vendors its own (older, VC++2019-era) copy of
+    # MSVCP140.dll alongside its own bin/. torch (built against a newer MSVC
+    # toolchain) also needs MSVCP140.dll, resolved by bare name from its
+    # import table, and the PyInstaller-bootloader-registered search path
+    # finds PyQt5's older copy before the newer one collected at the bundle
+    # root (via torch's own collect_all()). The two aren't ABI-compatible:
+    # whichever object code actually runs against the older copy segfaults
+    # (0xc0000005) inside MSVCP140.dll's own code the moment torch calls
+    # into it -- confirmed via Windows Event Viewer's Application log on a
+    # real onedir build, not a hypothetical.
+    #
+    # Only MSVCP140.dll itself is excluded here, deliberately -- torch does
+    # NOT bundle its own MSVCP140_1.dll/VCRUNTIME140*.dll (torch/lib has no
+    # such files; collect_dynamic_libs("torch") only supplies MSVCP140.dll
+    # via the root-level copy), so PyQt5's copies of those are the only
+    # ones in the whole bundle. Excluding them too was tried and made
+    # things worse: with no bundled copy left, MSVCP140_1.dll resolution
+    # fell through to whatever's in C:\Windows\System32, an older build
+    # incompatible with torch's shm.dll -- shm.dll loaded fine (no crash)
+    # but failed a specific GetProcAddress lookup ("WinError 127: The
+    # specified procedure could not be found"). Microsoft's redistributable
+    # is binary-compatible across the whole 14.x (VS2015-2022) line, so the
+    # newer root-level MSVCP140.dll works for every consumer including Qt5;
+    # there's no equivalent newer fallback to rely on for MSVCP140_1.dll.
+    a.binaries = [
+        entry
+        for entry in a.binaries
+        if not (
+            "PyQt5" in entry[0].replace("\\", "/").split("/")
+            and Path(entry[0]).name.lower() == "msvcp140.dll"
+        )
+    ]
+
 pyz = PYZ(a.pure)
 
 exe = EXE(
