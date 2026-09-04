@@ -14,6 +14,7 @@ class DocumentType(str, Enum):
     PREPAID_CONTRACT = "prepaid_contract"
     SIM_CHANGE_FORM = "sim_change_form"
     OWNERSHIP_CONFIRMATION = "ownership_confirmation"
+    SERVICE_REGISTRATION = "service_registration"
 
 
 DOCUMENT_NAMES = {
@@ -31,6 +32,10 @@ DOCUMENT_NAMES = {
         "Phiếu cung cấp và thay đổi dịch vụ thông tin di động mặt đất (trả trước)"
     ),
     DocumentType.OWNERSHIP_CONFIRMATION: "Giấy cam kết – Dành cho Giao dịch xác nhận quyền",
+    DocumentType.SERVICE_REGISTRATION: (
+        "Phiếu đăng ký dịch vụ và bản xác nhận thông tin thuê bao Vietnamobile "
+        "trả trước"
+    ),
 }
 
 DOCUMENT_SHORT_NAMES = {
@@ -40,6 +45,7 @@ DOCUMENT_SHORT_NAMES = {
     DocumentType.PREPAID_CONTRACT: "Hợp đồng thuê bao trả trước",
     DocumentType.SIM_CHANGE_FORM: "Phiếu cung cấp & thay đổi dịch vụ trả trước",
     DocumentType.OWNERSHIP_CONFIRMATION: "Cam kết xác nhận quyền",
+    DocumentType.SERVICE_REGISTRATION: "Phiếu đăng ký dịch vụ trả trước",
 }
 
 
@@ -59,7 +65,7 @@ class ServiceTemplate(str, Enum):
     # each with one extra document type added to the generated set. Every
     # other dict below copies its base mẫu's own value verbatim; only
     # SERVICE_TEMPLATE_DOCUMENTS differs.
-    QUANG_HA_STT = "quang_ha_stt"  # Mẫu 2 + OWNERSHIP_CONFIRMATION
+    QUANG_HA_STT = "quang_ha_stt"  # own fixed document set, see SERVICE_TEMPLATE_DOCUMENTS
     QUANG_HA_SIM_CK = "quang_ha_sim_ck"  # Mẫu 5 + BEAUTIFUL_NUMBER
 
 
@@ -92,10 +98,13 @@ SERVICE_TEMPLATE_DOCUMENTS: dict[ServiceTemplate, list[DocumentType]] = {
         DocumentType.BEAUTIFUL_NUMBER, DocumentType.PREPAID_CONTRACT,
     ],
     ServiceTemplate.SIM_REPLACEMENT: [DocumentType.AFTERSALE, DocumentType.SIM_CHANGE_FORM],
-    # Mẫu 2's own 4 documents, plus the new ownership-confirmation form.
+    # Its own fixed 5-document set, given directly by the user with exact
+    # template paths -- NOT Mẫu 2's own set (that was an earlier, incorrect
+    # guess). Bên A ("người thực hiện chuyển chủ quyền") is always "Người
+    # đại diện 2" here, never OCR -- see on_service_template_changed().
     ServiceTemplate.QUANG_HA_STT: [
         DocumentType.TRANSFER, DocumentType.AFTERSALE,
-        DocumentType.BEAUTIFUL_NUMBER, DocumentType.PREPAID_CONTRACT,
+        DocumentType.SIM_CHANGE_FORM, DocumentType.SERVICE_REGISTRATION,
         DocumentType.OWNERSHIP_CONFIRMATION,
     ],
     # Mẫu 5's own 2 documents, plus the beautiful-number commitment (the
@@ -318,12 +327,16 @@ class ReportData:
     source_contract_number: str = ""
     # Dates of pre-existing paperwork the shop must actually look up (the
     # original service contract / prepaid registration form) -- unlike
-    # transfer_time/transfer_effective_date below (the moment THIS transfer
-    # takes effect, which really is "now"), these should never silently
-    # default to today.
+    # transfer_effective_date below (the moment THIS transfer takes
+    # effect, which really is "now"), these should never silently default
+    # to today.
     source_contract_date: str = ""
     registration_form_date: str = ""
-    transfer_time: str = field(default_factory=lambda: datetime.now().strftime("%H"))
+    # Per direct instruction: unlike transfer_effective_date (still "now"
+    # by default), the clerk must type this by hand every time -- never
+    # silently pre-filled with whatever hour the case happened to be
+    # opened at.
+    transfer_time: str = ""
     transfer_effective_date: str = field(default_factory=lambda: date.today().strftime("%d/%m/%Y"))
     has_id_attachment: bool = True
     has_original_sim: bool = False

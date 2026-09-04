@@ -7,6 +7,7 @@ from .base import BaseDocumentModule
 from .beautiful_number import BeautifulNumberDocumentModule
 from .ownership_confirmation import OwnershipConfirmationDocumentModule
 from .prepaid_contract import PrepaidContractDocumentModule
+from .service_registration import ServiceRegistrationDocumentModule
 from .sim_change_form import SimChangeFormDocumentModule
 from .transfer import TransferDocumentModule
 
@@ -20,6 +21,7 @@ class DocumentRegistry:
             PrepaidContractDocumentModule(),
             SimChangeFormDocumentModule(),
             OwnershipConfirmationDocumentModule(),
+            ServiceRegistrationDocumentModule(),
         ]
         self._modules = {module.document_type: module for module in modules}
 

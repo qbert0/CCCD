@@ -20,6 +20,21 @@ def _textbox_text(paragraph: Paragraph) -> list[str]:
     return texts
 
 
+def _has_inline_image(document: Document) -> bool:
+    return any(
+        run._r.findall(qn("w:drawing"))
+        for paragraph in document.paragraphs
+        for run in paragraph.runs
+    ) or any(
+        run._r.findall(qn("w:drawing"))
+        for table in document.tables
+        for row in table.rows
+        for cell in row.cells
+        for paragraph in cell.paragraphs
+        for run in paragraph.runs
+    )
+
+
 def docx_text(path: Path) -> str:
     document = Document(str(path))
     values = []
@@ -719,6 +734,155 @@ class DocumentTest(unittest.TestCase):
             output = self.registry.for_data(data).generate(data, Path(folder))
             text = docx_text(output)
             self.assertIn("☐ Việt Nam    ☑ Nước ngoài: Nhật Bản", text)
+
+    def test_sim_change_form_fills_changed_column_and_signs_as_new_owner(self):
+        # QUANG_HA_STT shape: customer is the fixed "Người đại diện 2"
+        # identity (Bên A, who registered the number but never physically
+        # signs), new_owner is the actual walk-in customer -- the "Thông
+        # tin khách hàng thay đổi" column must show new_owner's own info,
+        # and "KHÁCH HÀNG ĐẠI DIỆN" must sign as new_owner, not customer.
+        with tempfile.TemporaryDirectory() as folder:
+            data = self.report(DocumentType.SIM_CHANGE_FORM)
+            output = self.registry.for_data(data).generate(data, Path(folder))
+            document = Document(str(output))
+            table = document.tables[0]
+            self.assertIn("TRẦN THỊ B", table.rows[1].cells[1].text)
+            self.assertIn("001204001289", table.rows[4].cells[1].text)
+            self.assertIn("02/02/2022", table.rows[4].cells[1].text)
+            # Left column is unaffected -- still the original customer.
+            self.assertIn("NGUYỄN VĂN AN", table.rows[1].cells[0].text)
+            text = docx_text(output)
+            self.assertNotIn("{{", text)
+            # The signature block signs as the physical new owner, not
+            # the fixed customer identity.
+            given_name_index = text.index("KHÁCH HÀNG ĐẠI DIỆN")
+            self.assertIn("Trần Thị B", text[given_name_index:given_name_index + 400])
+
+    def test_sim_change_form_without_new_owner_leaves_changed_column_blank(self):
+        # SIM_REPLACEMENT/QUANG_HA_SIM_CK shape: single-party, new_owner
+        # is never populated -- the "thay đổi" column must stay the
+        # original blank-dots look, and the customer signs for themselves.
+        with tempfile.TemporaryDirectory() as folder:
+            data = self.report(DocumentType.SIM_CHANGE_FORM)
+            data.new_owner = PersonData()
+            output = self.registry.for_data(data).generate(data, Path(folder))
+            document = Document(str(output))
+            table = document.tables[0]
+            self.assertNotIn("TRẦN THỊ B", table.rows[1].cells[1].text)
+            self.assertNotIn("Cục Cảnh sát QLHC về TTXH", table.rows[4].cells[1].text)
+            self.assertIn("...", table.rows[1].cells[1].text)
+            text = docx_text(output)
+            self.assertNotIn("{{", text)
+            given_name_index = text.index("KHÁCH HÀNG ĐẠI DIỆN")
+            self.assertIn("Nguyễn Văn An", text[given_name_index:given_name_index + 400])
+
+    def test_service_registration_nationality_is_a_real_checkbox_not_text(self):
+        with tempfile.TemporaryDirectory() as folder:
+            data = self.report(DocumentType.SERVICE_REGISTRATION)
+            output = self.registry.for_data(data).generate(data, Path(folder))
+            text = docx_text(output)
+            self.assertIn("☑ Việt Nam    ☐ Nước ngoài", text)
+            self.assertNotIn("{{", text)
+
+    def test_service_registration_foreign_person_prints_passport_country(self):
+        with tempfile.TemporaryDirectory() as folder:
+            data = self.report(DocumentType.SERVICE_REGISTRATION)
+            data.customer.nationality = "Nhật Bản"
+            data.customer.foreign_country = "Nhật Bản"
+            output = self.registry.for_data(data).generate(data, Path(folder))
+            text = docx_text(output)
+            self.assertIn("☐ Việt Nam    ☑ Nước ngoài: Nhật Bản", text)
+
+    def test_service_registration_subscriber_table_fills_three_fixed_rows(self):
+        with tempfile.TemporaryDirectory() as folder:
+            data = self.report(DocumentType.SERVICE_REGISTRATION)
+            data.subscribers = [
+                {"subscriber_number": "0925111111", "sim_serial": "SIM111", "activation_date": "11/08/2026"},
+                {"subscriber_number": "0925222222", "sim_serial": "SIM222", "activation_date": "12/08/2026"},
+            ]
+            output = self.registry.for_data(data).generate(data, Path(folder))
+            document = Document(str(output))
+            table = document.tables[0]
+            self.assertEqual(len(table.rows), 4)  # header + 3 fixed rows, never cloned
+            self.assertEqual(
+                [cell.text for cell in table.rows[1].cells], ["1", "0925111111", "SIM111", "11/08/2026"],
+            )
+            self.assertEqual(
+                [cell.text for cell in table.rows[2].cells], ["2", "0925222222", "SIM222", "12/08/2026"],
+            )
+            self.assertEqual([cell.text for cell in table.rows[3].cells], ["3", "", "", ""])
+
+    def test_customer_signature_image_takes_priority_over_cursive_text(self):
+        # Regression: beautiful_number/sim_change_form/service_registration
+        # all share _common_context's own "customer_signature_name" key,
+        # but SIGNATURE_IMAGE_SLOTS never mapped it to customer.signature_path
+        # -- an uploaded signature (e.g. Representative 2's, for
+        # QUANG_HA_STT) was silently ignored and the cursive-text name
+        # printed instead, even once an image existed.
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as folder:
+            image_path = Path(folder) / "signature.png"
+            Image.new("RGBA", (200, 100), (255, 255, 255, 0)).save(image_path)
+            data = self.report(DocumentType.SERVICE_REGISTRATION)
+            data.customer.signature_path = str(image_path)
+            output = self.registry.for_data(data).generate(data, Path(folder))
+            document = Document(str(output))
+            self.assertTrue(_has_inline_image(document), "expected an inline signature image, found none")
+            text = docx_text(output)
+            self.assertNotIn("Nguyễn Văn An", text)
+
+    def test_ownership_confirmation_supports_signature_images(self):
+        # Regression: ownership_confirmation's own 2 signers (requester,
+        # clerk) were never in SIGNATURE_IMAGE_SLOTS at all -- an uploaded
+        # image was silently ignored for both, always falling back to the
+        # cursive-text name.
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as folder:
+            image_path = Path(folder) / "signature.png"
+            Image.new("RGBA", (200, 100), (255, 255, 255, 0)).save(image_path)
+            data = self.report(DocumentType.OWNERSHIP_CONFIRMATION)
+            data.customer.signature_path = str(image_path)
+            data.operator_signature_path = str(image_path)
+            output = self.registry.for_data(data).generate(data, Path(folder))
+            document = Document(str(output))
+            self.assertTrue(_has_inline_image(document), "expected inline signature images, found none")
+            signature_table = document.tables[1]
+            self.assertEqual(
+                [cell.text for cell in signature_table.rows[0].cells],
+                ["NGƯỜI YÊU CẦU\n(Ký, ghi rõ họ tên)\n\n", "GIAO DỊCH VIÊN\n(Ký, ghi rõ họ tên)\n\n"],
+            )
+
+    def test_service_registration_clerk_signature_supports_images(self):
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as folder:
+            image_path = Path(folder) / "signature.png"
+            Image.new("RGBA", (200, 100), (255, 255, 255, 0)).save(image_path)
+            data = self.report(DocumentType.SERVICE_REGISTRATION)
+            data.operator_signature_path = str(image_path)
+            output = self.registry.for_data(data).generate(data, Path(folder))
+            document = Document(str(output))
+            self.assertTrue(_has_inline_image(document), "expected an inline signature image, found none")
+            # staff_name is ALSO printed as plain info ("Họ tên nhân viên
+            # giao dịch: ...") elsewhere on the page -- only the signature
+            # table's own clerk cell should lose its cursive-text name.
+            signature_table = document.tables[-1]
+            self.assertEqual(
+                signature_table.rows[0].cells[-1].text, "GIAO DỊCH VIÊN\n(Ký, ghi rõ họ tên)\n\n",
+            )
+
+    def test_service_registration_prints_provider_representative_and_position(self):
+        with tempfile.TemporaryDirectory() as folder:
+            data = self.report(DocumentType.SERVICE_REGISTRATION)
+            data.provider_representative = "VÕ DUY NHẬT"
+            data.provider_position = "Giám đốc"
+            output = self.registry.for_data(data).generate(data, Path(folder))
+            text = docx_text(output)
+            self.assertIn("Người đại diện: VÕ DUY NHẬT", text)
+            self.assertIn("Chức vụ: Giám đốc", text)
+            self.assertNotIn("{{", text)
 
     def test_placeholder_split_across_word_runs_keeps_other_run_styles(self):
         from desktop_app.backend.documents.renderer import _replace_placeholders

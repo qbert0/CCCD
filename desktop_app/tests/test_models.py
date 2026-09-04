@@ -18,6 +18,13 @@ class ModelTest(unittest.TestCase):
         self.assertEqual(result["date_of_birth"], "01/01/1999")
         self.assertEqual(result["issue_date"], "01/01/2021")
 
+    def test_transfer_time_no_longer_defaults_to_current_hour(self):
+        # Per direct instruction: the clerk types this by hand every time,
+        # never silently pre-filled with whatever hour the case happened
+        # to be opened at (transfer_effective_date is unaffected -- still
+        # defaults to today).
+        self.assertEqual(ReportData(document_type=DocumentType.TRANSFER).transfer_time, "")
+
     def test_transfer_requires_new_owner(self):
         data = ReportData(
             document_type=DocumentType.TRANSFER,

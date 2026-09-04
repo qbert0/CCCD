@@ -35,6 +35,10 @@ from desktop_app.backend.config.representative_profile import (
     load_representative_profile,
     save_representative_profile as save_representative_profile_storage,
 )
+from desktop_app.backend.config.representative_2_profile import (
+    load_representative_2_profile,
+    save_representative_2_profile as save_representative_2_profile_storage,
+)
 from desktop_app.backend.documents import (
     ConversionToolsMissing,
     DocumentRegistry,
@@ -275,6 +279,7 @@ class WebBridge(QObject):
         self.registry = DocumentRegistry()
         self.company_profile = load_company_profile(self.settings)
         self.representative_profile = load_representative_profile(self.settings)
+        self.representative_2_profile = load_representative_2_profile(self.settings)
         self.operator_profiles = load_operator_profiles(self.settings)
         self.document_set_overrides = load_document_set_overrides(self.settings)
 
@@ -835,6 +840,11 @@ class WebBridge(QObject):
                     if template in {
                         ServiceTemplate.PREPAID_TRANSFER_ORG,
                         ServiceTemplate.COMMITMENT_TRANSFER_ORG,
+                        # QUANG_HA_STT's Bên A comes from the fixed "Người
+                        # đại diện 2" profile, not a photo -- only the new
+                        # subscriber (person123) is scanned, same 3-slot
+                        # shape as the org-transfer templates above.
+                        ServiceTemplate.QUANG_HA_STT,
                     }
                     else "requester_123"
                     if template in {ServiceTemplate.SIM_REPLACEMENT, ServiceTemplate.QUANG_HA_SIM_CK}
@@ -906,6 +916,16 @@ class WebBridge(QObject):
         elif template == ServiceTemplate.SIM_REPLACEMENT:
             customer = person123
             new_owner = {}
+        elif template == ServiceTemplate.QUANG_HA_STT:
+            # Bên A / "người thực hiện chuyển chủ quyền" is a fixed identity
+            # for this service -- "Người đại diện 2", a 2nd persisted
+            # profile independent of representative_profile (which feeds a
+            # different role entirely, see _profile_defaults_patch). Only
+            # the new subscriber (Bên C / new_owner) is still OCR'd, from
+            # person123 -- required_input_numbers()/source_role both give
+            # this template only 3 photo slots for exactly that reason.
+            customer = asdict(self.representative_2_profile)
+            new_owner = person123
         else:
             customer = person123
             new_owner = person456
@@ -946,6 +966,28 @@ class WebBridge(QObject):
             )
         else:
             state_patch["prepaid_structured_parties"] = False
+
+        if (
+            DocumentType.SERVICE_REGISTRATION in document_types
+            and DocumentType.PREPAID_CONTRACT not in document_types
+        ):
+            # SERVICE_REGISTRATION's own "2. Điểm cung cấp dịch vụ" block
+            # needs the same 3 fields PREPAID_CONTRACT's own block above
+            # already defaults -- but QUANG_HA_STT never generates
+            # PREPAID_CONTRACT itself, so that block never runs. Same
+            # defaulting logic, deliberately NOT reusing the block above
+            # (which also overlays provider_company/representative from
+            # _profile_defaults_patch and flips prepaid_structured_parties --
+            # neither applies here: Bên A is representative_2, not an org).
+            state_patch["service_point_address"] = (
+                state.get("service_point_address") or state_patch.get("shop_address") or state.get("shop_address", "")
+            )
+            state_patch["service_point_phone"] = (
+                state.get("service_point_phone") or state_patch.get("shop_phone") or state.get("shop_phone", "")
+            )
+            state_patch["service_point_name"] = (
+                state.get("service_point_name") or DEFAULT_SERVICE_POINT_NAME
+            )
 
         subscribers = state.get("subscribers")
         if not isinstance(subscribers, list) or not subscribers:
@@ -1203,13 +1245,14 @@ class WebBridge(QObject):
         per-signer file (always .png now, regardless of what format the
         original upload was -- the crop step always re-encodes). `slug`
         is one of the same per-signer names the old _store_signature_image
-        used: "provider", "representative", "customer_representative", or
-        f"operator_{profile_id}" -- the caller already knows which, same
-        as it always has. Provider and representative persist immediately
-        here (mirroring their old choose_*_signature behavior); operator
-        profiles still wait for the explicit "Lưu giao dịch viên" save,
-        and customer_representative is never persisted to Settings at all
-        (per-case only) -- same 3-way split as before this feature."""
+        used: "provider", "representative", "representative_2",
+        "customer_representative", or f"operator_{profile_id}" -- the
+        caller already knows which, same as it always has. Provider and
+        both representative profiles persist immediately here (mirroring
+        their old choose_*_signature behavior); operator profiles still
+        wait for the explicit "Lưu giao dịch viên" save, and
+        customer_representative is never persisted to Settings at all
+        (per-case only) -- same split as before this feature."""
         destination = _signatures_dir() / f"{slug}.png"
         destination.write_bytes(base64.b64decode(base64_png))
         if slug == "provider":
@@ -1218,6 +1261,9 @@ class WebBridge(QObject):
         elif slug == "representative":
             self.representative_profile.signature_path = str(destination)
             save_representative_profile_storage(self.settings, self.representative_profile)
+        elif slug == "representative_2":
+            self.representative_2_profile.signature_path = str(destination)
+            save_representative_2_profile_storage(self.settings, self.representative_2_profile)
         return json.dumps({
             "ok": True,
             "signature_path": str(destination),
@@ -1249,6 +1295,15 @@ class WebBridge(QObject):
         if not path:
             return json.dumps({"ok": False})
         return json.dumps({"ok": True, "signature_source": thumbnail_data_url(Path(path), max_size=1600)})
+
+    @pyqtSlot(result=str)
+    def clear_provider_signature(self) -> str:
+        """Revert to the plain cursive-text signature -- the uploaded PNG
+        stays on disk (same cheap-and-harmless choice as every other
+        clear_*_signature slot below), only the reference is cleared."""
+        self.settings.setValue(PROVIDER_SIGNATURE_SETTINGS_KEY, "")
+        self.settings.sync()
+        return json.dumps({"ok": True})
 
     # ------------------------------------------------------------------
     # Which documents each service generates -- a safety net for a wrong
@@ -1353,6 +1408,64 @@ class WebBridge(QObject):
         return json.dumps({"ok": True, "errors": []})
 
     @pyqtSlot(result=str)
+    def get_representative_2_profile_layout(self) -> str:
+        """"Người đại diện 2" sub-tab -- a 2nd, independent profile from
+        "Người đại diện" above, used only by QUANG_HA_STT to supply Bên A
+        (see on_service_template_changed()). Same 3 fixed rows, bound to
+        "representative_2.*" field paths instead of "representative.*"."""
+        return json.dumps(resolve_representative_profile_layout(prefix="representative_2"))
+
+    @pyqtSlot(result=str)
+    def get_representative_2_profile(self) -> str:
+        payload = asdict(self.representative_2_profile)
+        signature_path = self.representative_2_profile.signature_path
+        payload["signature_thumbnail"] = (
+            thumbnail_data_url(Path(signature_path))
+            if signature_path and Path(signature_path).is_file()
+            else ""
+        )
+        return json.dumps(payload)
+
+    @pyqtSlot(str, result=str)
+    def save_representative_2_profile(self, person_json: str) -> str:
+        person = person_from_dict(json.loads(person_json))
+        person.entity_type = "Cá nhân"
+        report = ReportData(document_type=DocumentType.AFTERSALE, customer=person)
+        errors = required_errors(report, personal_information_required("customer"))
+        errors += person_errors("customer", person, {"id_number", "date_of_birth", "issue_date"})
+        if errors:
+            return json.dumps(
+                {
+                    "ok": False,
+                    "errors": [
+                        {"path": e.path.replace("customer.", "representative_2.", 1), "message": e.message}
+                        for e in errors
+                    ],
+                }
+            )
+        save_representative_2_profile_storage(self.settings, person)
+        self.representative_2_profile = person
+        return json.dumps({"ok": True, "errors": []})
+
+    @pyqtSlot(result=str)
+    def choose_representative_2_signature(self) -> str:
+        """Người đại diện 2's own signature image -- mirrors
+        choose_representative_signature exactly, just a separate profile."""
+        path, _ = QFileDialog.getOpenFileName(
+            self.window, "Chọn ảnh chữ ký người đại diện 2", str(Path.home()),
+            "Ảnh (*.png *.jpg *.jpeg)",
+        )
+        if not path:
+            return json.dumps({"ok": False})
+        return json.dumps({"ok": True, "signature_source": thumbnail_data_url(Path(path), max_size=1600)})
+
+    @pyqtSlot(result=str)
+    def clear_representative_2_signature(self) -> str:
+        self.representative_2_profile.signature_path = ""
+        save_representative_2_profile_storage(self.settings, self.representative_2_profile)
+        return json.dumps({"ok": True})
+
+    @pyqtSlot(result=str)
     def choose_customer_representative_signature(self) -> str:
         """The old owner's own org representative's signature -- unlike
         choose_representative_signature (a persistent Settings profile),
@@ -1381,6 +1494,12 @@ class WebBridge(QObject):
         if not path:
             return json.dumps({"ok": False})
         return json.dumps({"ok": True, "signature_source": thumbnail_data_url(Path(path), max_size=1600)})
+
+    @pyqtSlot(result=str)
+    def clear_representative_signature(self) -> str:
+        self.representative_profile.signature_path = ""
+        save_representative_profile_storage(self.settings, self.representative_profile)
+        return json.dumps({"ok": True})
 
     @pyqtSlot(str, result=str)
     def save_company_profile(self, person_json: str) -> str:

@@ -2,7 +2,16 @@ from desktop_app.backend.domain.models import DocumentType, ReportData
 from desktop_app.backend.paths import resource_path
 
 from ..base import BaseDocumentModule
-from ..renderer import _common_context, _date_parts, _given_name, _subscriber_numbers_joined, choice_mark
+from ..renderer import (
+    CHECKED_BOX,
+    EMPTY_BOX,
+    _common_context,
+    _date_parts,
+    _given_name,
+    _subscriber_numbers_joined,
+    choice_mark,
+    dotted,
+)
 from .schema import SimChangeFormSchema
 
 
@@ -25,6 +34,18 @@ class SimChangeFormDocumentModule(BaseDocumentModule):
         "customer_signature_name", "customer_signature_given_name",
         "provider_representative_signature", "provider_representative_signature_given_name",
         "sim_operator_signature_name", "sim_operator_signature_given_name",
+        # "Thông tin khách hàng thay đổi" column -- the actual physical
+        # signer's updated info, whenever this document represents a real
+        # old -> new change (QUANG_HA_STT: Bên A/customer is the fixed
+        # "Người đại diện 2" identity that originally registered the
+        # number, new_owner is the actual walk-in customer scanned via
+        # QR). Left blank/dotted for SIM_REPLACEMENT/QUANG_HA_SIM_CK,
+        # whose new_owner is always empty -- see build_context below.
+        "sim_customer_new_name", "sim_customer_new_id_number",
+        "sim_customer_new_birth_date", "sim_customer_new_gender",
+        "sim_customer_new_issue_date", "sim_customer_new_issue_place",
+        "sim_customer_new_address", "sim_customer_new_phone",
+        "sim_customer_new_email", "sim_customer_new_nationality",
     })
     template = resource_path(
         "desktop_app", "backend", "documents", "sim_change_form",
@@ -40,7 +61,22 @@ class SimChangeFormDocumentModule(BaseDocumentModule):
         from _docx_context()'s own sim_* block, not re-derived from
         scratch, so this is a straight extraction, not a rewrite."""
         customer = data.customer
+        new_owner = data.new_owner
+        # True only when this case actually carries a 2nd, distinct party
+        # (QUANG_HA_STT) -- SIM_REPLACEMENT/QUANG_HA_SIM_CK never populate
+        # new_owner (single-party services), so this stays False for them
+        # and the "thay đổi" column/signature both fall back to their
+        # original blank-dots/customer-signs-for-themselves behavior.
+        has_new_owner = bool(new_owner.full_name.strip())
         sim_request_day, sim_request_month, sim_request_year = _date_parts(data.document_date)
+
+        def nationality_mark(person) -> str:
+            if not person.nationality.strip():
+                return f"{EMPTY_BOX} Việt Nam    {EMPTY_BOX} Nước ngoài"
+            if person.nationality.casefold() == "việt nam":
+                return f"{CHECKED_BOX} Việt Nam    {EMPTY_BOX} Nước ngoài"
+            return f"{EMPTY_BOX} Việt Nam    {CHECKED_BOX} Nước ngoài: {person.foreign_country or person.nationality}"
+
         context = {
             **_common_context(data),
             "sim_customer_name": customer.display_name().upper(),
@@ -80,6 +116,36 @@ class SimChangeFormDocumentModule(BaseDocumentModule):
             "account_balance": data.account_balance,
             "last_changed_service": data.last_changed_service,
             "sim_operator_signature_name": data.staff_name.upper(),
+            # PersonData's own dataclass defaults (issue_place in
+            # particular: "Cục Cảnh sát QLHC về TTXH", never an empty
+            # string) leak through an unset new_owner -- gate every field
+            # behind has_new_owner explicitly rather than trusting
+            # dotted()'s own empty-string check, or SIM_REPLACEMENT/
+            # QUANG_HA_SIM_CK's blank new_owner would still print that
+            # default place name instead of the intended blank dots.
+            "sim_customer_new_name": dotted(new_owner.display_name().upper() if has_new_owner else "", 28),
+            "sim_customer_new_id_number": dotted(new_owner.id_number if has_new_owner else "", 16),
+            "sim_customer_new_birth_date": dotted(new_owner.date_of_birth if has_new_owner else "", 12),
+            "sim_customer_new_gender": dotted(new_owner.gender if has_new_owner else "", 16),
+            "sim_customer_new_issue_date": dotted(new_owner.issue_date if has_new_owner else "", 12),
+            "sim_customer_new_issue_place": dotted(new_owner.issue_place if has_new_owner else "", 28),
+            "sim_customer_new_address": dotted(new_owner.address if has_new_owner else "", 36),
+            "sim_customer_new_phone": dotted(new_owner.phone if has_new_owner else "", 16),
+            "sim_customer_new_email": dotted(new_owner.email if has_new_owner else "", 24),
+            "sim_customer_new_nationality": (
+                nationality_mark(new_owner) if has_new_owner
+                else f"{EMPTY_BOX} Việt Nam    {EMPTY_BOX} Nước ngoài"
+            ),
         }
         context["sim_operator_signature_given_name"] = _given_name(context["sim_operator_signature_name"])
+        # "KHÁCH HÀNG ĐẠI DIỆN" signs in person -- for QUANG_HA_STT that's
+        # always the actual walk-in customer (new_owner), never the fixed
+        # "Người đại diện 2" identity that only exists on paper for the
+        # original registration (representative_2 is never physically
+        # present to sign this document). Every other caller of this
+        # module keeps _common_context's own customer_signature_name
+        # (the customer signs for themselves) unchanged.
+        if has_new_owner:
+            context["customer_signature_name"] = new_owner.display_name().upper()
+            context["customer_signature_given_name"] = _given_name(context["customer_signature_name"])
         return context

@@ -31,6 +31,9 @@ def required_input_numbers(template: ServiceTemplate) -> tuple[int, ...]:
         ServiceTemplate.COMMITMENT_TRANSFER_ORG,
         ServiceTemplate.SIM_REPLACEMENT,
         ServiceTemplate.QUANG_HA_SIM_CK,
+        # Bên A comes from the fixed "Người đại diện 2" profile, not a
+        # photo -- only the new subscriber (1-3) needs to be scanned.
+        ServiceTemplate.QUANG_HA_STT,
     }:
         return (PRIMARY_FRONT, PRIMARY_BACK, PRIMARY_PHOTO)
     return (

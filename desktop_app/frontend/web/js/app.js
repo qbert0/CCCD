@@ -19,6 +19,8 @@
         profileLayout: null,
         representative: null,
         representativeLayout: null,
+        representative2: null,
+        representative2Layout: null,
         operatorProfiles: null,
         providerSignature: null,
         documentSetSettings: null,
@@ -92,6 +94,7 @@
         const path = this.calendar?.field?.path || "";
         return !!this.profile && (
           path.startsWith("profile.") || path.startsWith("representative.")
+          || path.startsWith("representative_2.")
         );
       },
       profileRoot() {
@@ -100,12 +103,16 @@
       representativeRoot() {
         return { representative: this.representative || {} };
       },
+      representative2Root() {
+        return { representative_2: this.representative2 || {} };
+      },
       profileNavItems() {
         return [
           { id: "company", number: "01", label: "Công ty", hint: "Pháp nhân và điểm giao dịch" },
           { id: "representative", number: "02", label: "Người đại diện", hint: "Danh tính người đại diện" },
-          { id: "operators", number: "03", label: "Giao dịch viên", hint: "Tên, chữ ký và dịch vụ phụ trách" },
-          { id: "document_sets", number: "04", label: "Tài liệu theo dịch vụ", hint: "Bật/tắt từng tài liệu cho mỗi dịch vụ" },
+          { id: "representative_2", number: "03", label: "Người đại diện 2", hint: "Bên A của dịch vụ Quang Hà - STT" },
+          { id: "operators", number: "04", label: "Giao dịch viên", hint: "Tên, chữ ký và dịch vụ phụ trách" },
+          { id: "document_sets", number: "05", label: "Tài liệu theo dịch vụ", hint: "Bật/tắt từng tài liệu cho mỗi dịch vụ" },
         ];
       },
     },
@@ -495,16 +502,18 @@
         this.profileLoading = true;
         state.ui.errors = {};
         try {
-          const [person, layout, representative, representativeLayout, operatorProfiles, providerSignature, documentSetSettings] = await Promise.all([
+          const [person, layout, representative, representativeLayout, representative2, representative2Layout, operatorProfiles, providerSignature, documentSetSettings] = await Promise.all([
             CCCD.bridge.getCompanyProfile(),
             CCCD.bridge.getCompanyProfileLayout(),
             CCCD.bridge.getRepresentativeProfile(),
             CCCD.bridge.getRepresentativeProfileLayout(),
+            CCCD.bridge.getRepresentative2Profile(),
+            CCCD.bridge.getRepresentative2ProfileLayout(),
             CCCD.bridge.getOperatorProfiles(),
             CCCD.bridge.getProviderSignature(),
             CCCD.bridge.getDocumentSetSettings(),
           ]);
-          if (!person || !layout || !representative || !representativeLayout || !operatorProfiles || !providerSignature || !documentSetSettings) {
+          if (!person || !layout || !representative || !representativeLayout || !representative2 || !representative2Layout || !operatorProfiles || !providerSignature || !documentSetSettings) {
             CCCD.pushToast("Không tải được thiết lập mặc định, hãy thử lại", "error");
             return;
           }
@@ -512,6 +521,8 @@
           this.profileLayout = layout;
           this.representative = representative;
           this.representativeLayout = representativeLayout;
+          this.representative2 = representative2;
+          this.representative2Layout = representative2Layout;
           this.operatorProfiles = operatorProfiles;
           this.providerSignature = providerSignature;
           this.documentSetSettings = documentSetSettings;
@@ -544,6 +555,15 @@
         }
         if (state.service_template) await this.onServiceTemplateChange(state.service_template);
         CCCD.pushToast("Đã lưu người đại diện mặc định", "success");
+      },
+      async saveRepresentative2Profile() {
+        const result = await CCCD.bridge.saveRepresentative2Profile(this.representative2);
+        if (!result.ok) {
+          for (const error of result.errors) state.ui.errors[error.path] = error.message;
+          return;
+        }
+        if (state.service_template) await this.onServiceTemplateChange(state.service_template);
+        CCCD.pushToast("Đã lưu người đại diện 2 mặc định", "success");
       },
       addOperatorProfile() {
         const suffix = `${Date.now()}_${Math.floor(Math.random() * 10000)}`;
@@ -581,6 +601,12 @@
           state.customer.signature_thumbnail = final.signature_thumbnail;
         });
       },
+      // Per-case only (never persisted to Settings, same as the upload
+      // side above) -- just clears the local state fields directly.
+      clearCustomerRepresentativeSignature() {
+        state.customer.signature_path = "";
+        state.customer.signature_thumbnail = "";
+      },
       async chooseRepresentativeSignature() {
         const result = await CCCD.bridge.chooseRepresentativeSignature();
         if (!result?.ok) return;
@@ -589,6 +615,29 @@
           this.representative.signature_thumbnail = final.signature_thumbnail;
           CCCD.pushToast("Đã lưu ảnh chữ ký người đại diện", "success");
         });
+      },
+      async clearRepresentativeSignature() {
+        const result = await CCCD.bridge.clearRepresentativeSignature();
+        if (!result?.ok) return;
+        this.representative.signature_path = "";
+        this.representative.signature_thumbnail = "";
+        CCCD.pushToast("Đã xóa ảnh chữ ký người đại diện", "success");
+      },
+      async chooseRepresentative2Signature() {
+        const result = await CCCD.bridge.chooseRepresentative2Signature();
+        if (!result?.ok) return;
+        this.openSignatureCrop(result.signature_source, "representative_2", (final) => {
+          this.representative2.signature_path = final.signature_path;
+          this.representative2.signature_thumbnail = final.signature_thumbnail;
+          CCCD.pushToast("Đã lưu ảnh chữ ký người đại diện 2", "success");
+        });
+      },
+      async clearRepresentative2Signature() {
+        const result = await CCCD.bridge.clearRepresentative2Signature();
+        if (!result?.ok) return;
+        this.representative2.signature_path = "";
+        this.representative2.signature_thumbnail = "";
+        CCCD.pushToast("Đã xóa ảnh chữ ký người đại diện 2", "success");
       },
       async chooseProviderSignature() {
         const result = await CCCD.bridge.chooseProviderSignature();
@@ -599,6 +648,14 @@
           state.provider_signature_path = final.signature_path;
           CCCD.pushToast("Đã lưu ảnh chữ ký bên cung cấp dịch vụ", "success");
         });
+      },
+      async clearProviderSignature() {
+        const result = await CCCD.bridge.clearProviderSignature();
+        if (!result?.ok) return;
+        this.providerSignature.signature_path = "";
+        this.providerSignature.signature_thumbnail = "";
+        state.provider_signature_path = "";
+        CCCD.pushToast("Đã xóa ảnh chữ ký bên cung cấp dịch vụ", "success");
       },
       async chooseOperatorSignature(profileId) {
         const result = await CCCD.bridge.chooseOperatorSignature();
@@ -614,6 +671,18 @@
             item.signature_thumbnail = final.signature_thumbnail;
           }
         });
+      },
+      // Operator signatures aren't persisted individually (same as every
+      // other field on this card) -- cleared locally, takes effect once
+      // "Lưu giao dịch viên" is pressed, same as a name edit.
+      clearOperatorSignature(profileId) {
+        const item = this.operatorProfiles.profiles.find(
+          (entry) => entry.profile_id === profileId,
+        );
+        if (item) {
+          item.signature_path = "";
+          item.signature_thumbnail = "";
+        }
       },
       removeOperatorProfile(profileId) {
         if (this.operatorProfiles.profiles.length <= 1) {
@@ -754,6 +823,8 @@
                   :src="state.customer.signature_thumbnail" alt="Chữ ký">
                 <button class="btn" type="button"
                   @click="chooseCustomerRepresentativeSignature">Chọn ảnh chữ ký đại diện…</button>
+                <button v-if="state.customer.signature_thumbnail" class="btn" type="button"
+                  @click="clearCustomerRepresentativeSignature">Xóa ảnh chữ ký</button>
               </div>
               <sectioned-form v-show="state.ui.activeTab === 'new_owner'"
                 :sections="newOwnerSections" :root="state" @open-calendar="openCalendar" />
@@ -776,7 +847,7 @@
         @confirm="confirmSignatureCrop" @cancel="cropModal = null" />
 
       <dialog class="modal modal--settings" ref="profileDialog"
-        @close="profile = null; representative = null; operatorProfiles = null; providerSignature = null; documentSetSettings = null; calendar = null">
+        @close="profile = null; representative = null; representative2 = null; operatorProfiles = null; providerSignature = null; documentSetSettings = null; calendar = null">
         <div class="settings-header">
           <div>
             <div class="eyebrow">Cấu hình dùng lại</div>
@@ -788,7 +859,7 @@
         </div>
 
         <div class="settings-layout"
-          v-if="profile && profileLayout && representative && representativeLayout && operatorProfiles && providerSignature && documentSetSettings">
+          v-if="profile && profileLayout && representative && representativeLayout && representative2 && representative2Layout && operatorProfiles && providerSignature && documentSetSettings">
           <nav class="settings-nav" aria-label="Nhóm thiết lập">
             <button v-for="item in profileNavItems" :key="item.id" type="button"
               :data-active="profileTab === item.id" @click="profileTab = item.id">
@@ -822,6 +893,25 @@
                   :src="representative.signature_thumbnail" alt="Chữ ký">
                 <button class="btn" type="button"
                   @click="chooseRepresentativeSignature">Chọn ảnh chữ ký…</button>
+                <button v-if="representative.signature_thumbnail" class="btn" type="button"
+                  @click="clearRepresentativeSignature">Xóa ảnh chữ ký</button>
+              </div>
+            </template>
+
+            <template v-else-if="profileTab === 'representative_2'">
+              <div class="settings-content__heading">
+                <h3>Người đại diện 2</h3>
+                <p>Bên A ("người thực hiện chuyển chủ quyền") của dịch vụ Ccq Quang Hà - STT.</p>
+              </div>
+              <personal-information-form :rows="representative2Layout.primary_rows"
+                :root="representative2Root" @open-calendar="openCalendar" />
+              <div class="signature-upload">
+                <img v-if="representative2.signature_thumbnail" class="signature-upload__preview"
+                  :src="representative2.signature_thumbnail" alt="Chữ ký">
+                <button class="btn" type="button"
+                  @click="chooseRepresentative2Signature">Chọn ảnh chữ ký…</button>
+                <button v-if="representative2.signature_thumbnail" class="btn" type="button"
+                  @click="clearRepresentative2Signature">Xóa ảnh chữ ký</button>
               </div>
             </template>
 
@@ -836,6 +926,8 @@
                   <img v-if="providerSignature.signature_thumbnail" class="signature-upload__preview"
                     :src="providerSignature.signature_thumbnail" alt="Chữ ký">
                   <button class="btn" type="button" @click="chooseProviderSignature">Chọn ảnh chữ ký…</button>
+                  <button v-if="providerSignature.signature_thumbnail" class="btn" type="button"
+                    @click="clearProviderSignature">Xóa ảnh chữ ký</button>
                 </div>
               </section>
               <div class="operator-profile-grid">
@@ -854,6 +946,8 @@
                       :src="item.signature_thumbnail" alt="Chữ ký">
                     <button class="btn" type="button"
                       @click="chooseOperatorSignature(item.profile_id)">Chọn ảnh chữ ký…</button>
+                    <button v-if="item.signature_thumbnail" class="btn" type="button"
+                      @click="clearOperatorSignature(item.profile_id)">Xóa ảnh chữ ký</button>
                   </div>
                   <fieldset class="operator-assignment">
                     <legend>Dịch vụ phụ trách</legend>
@@ -897,6 +991,8 @@
             @click="saveProfile">Lưu thông tin công ty</button>
           <button v-else-if="profileTab === 'representative'" class="btn btn--primary" type="button"
             @click="saveRepresentativeProfile">Lưu người đại diện</button>
+          <button v-else-if="profileTab === 'representative_2'" class="btn btn--primary" type="button"
+            @click="saveRepresentative2Profile">Lưu người đại diện 2</button>
           <button v-else-if="profileTab === 'operators'" class="btn btn--primary" type="button"
             @click="saveOperatorProfiles">Lưu giao dịch viên</button>
           <button v-else class="btn btn--primary" type="button"

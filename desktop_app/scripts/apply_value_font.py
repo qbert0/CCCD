@@ -46,6 +46,7 @@ TEMPLATES = [
     ROOT / "desktop_app/backend/documents/beautiful_number/00_MAU_PHU_LUC_CAM_KET_SO_DEP_editable.docx",
     ROOT / "desktop_app/backend/documents/sim_change_form/00_MAU_PHIEU_THAY_DOI_DICH_VU_TRA_TRUOC.docx",
     ROOT / "desktop_app/backend/documents/ownership_confirmation/00_MAU_GIAY_CAM_KET_XAC_NHAN_QUYEN.docx",
+    ROOT / "desktop_app/backend/documents/service_registration/00_MAU_PHIEU_DANG_KY_DICH_VU.docx",
 ]
 
 VALUE_FONT_SIZE = Pt(12)
@@ -70,15 +71,25 @@ DATE_FIELD_NAMES = {
     "prepaid_organization_issue_date", "prepaid_organization_birth_date",
     "prepaid_individual_issue_date", "prepaid_individual_birth_date",
     "sim_customer_birth_date", "sim_customer_issue_date",
+    "sim_customer_new_birth_date", "sim_customer_new_issue_date",
     "sim_request_date_line", "sim_document_date_line",
     "ownership_day", "ownership_month", "ownership_year",
     "ownership_customer_issue_date",
+    "service_registration_day", "service_registration_month", "service_registration_year",
+    "service_registration_customer_issue_date", "service_registration_customer_birth_date",
+    "registration_time",
 }
 
 # renderer.py's prepaid_individual_nationality bakes a CHECKED_BOX/EMPTY_BOX
 # glyph pair directly into its own value text -- a checkbox choice, not a
 # "_mark"-suffixed token, but the same "it's a tick, not data" reasoning.
-CHECKBOX_EMBEDDED_FIELD_NAMES = {"prepaid_individual_nationality"}
+# sim_customer_new_nationality (sim_change_form) and
+# service_registration_customer_nationality (service_registration) do the
+# same thing, same reasoning.
+CHECKBOX_EMBEDDED_FIELD_NAMES = {
+    "prepaid_individual_nationality", "sim_customer_new_nationality",
+    "service_registration_customer_nationality",
+}
 
 
 def _skip_field(name: str) -> bool:
@@ -144,6 +155,22 @@ BEAUTIFUL_NUMBER_SUBSCRIBER_ROW = (
     0, 1, (1, 2, 3, 4),
 )
 
+# Same shape as beautiful_number's own row above -- see
+# bake_field_highlighting.py's identically-named constants for why each
+# is shaped the way it is (ownership_confirmation clones ONE template
+# row; service_registration fills 3 FIXED rows in place).
+OWNERSHIP_CONFIRMATION_SUBSCRIBER_ROW = (
+    ROOT / "desktop_app/backend/documents/ownership_confirmation/00_MAU_GIAY_CAM_KET_XAC_NHAN_QUYEN.docx",
+    0, 1, (1, 2, 3, 4),
+)
+SERVICE_REGISTRATION_SUBSCRIBER_ROWS = [
+    (
+        ROOT / "desktop_app/backend/documents/service_registration/00_MAU_PHIEU_DANG_KY_DICH_VU.docx",
+        0, row_index, (1, 2, 3),
+    )
+    for row_index in (1, 2, 3)
+]
+
 
 def _apply_known_table_row(path: Path, table_index: int, row_index: int, columns: tuple[int, ...]) -> int:
     document = Document(str(path))
@@ -173,3 +200,10 @@ if __name__ == "__main__":
 
     extra = _apply_known_table_row(*BEAUTIFUL_NUMBER_SUBSCRIBER_ROW)
     print(f"{BEAUTIFUL_NUMBER_SUBSCRIBER_ROW[0].name}: styled {extra} subscriber-row cell(s) (no {{{{ }}}} tokens)")
+
+    extra = _apply_known_table_row(*OWNERSHIP_CONFIRMATION_SUBSCRIBER_ROW)
+    print(f"{OWNERSHIP_CONFIRMATION_SUBSCRIBER_ROW[0].name}: styled {extra} subscriber-row cell(s) (no {{{{ }}}} tokens)")
+
+    for row in SERVICE_REGISTRATION_SUBSCRIBER_ROWS:
+        extra = _apply_known_table_row(*row)
+        print(f"{row[0].name} row {row[2]}: styled {extra} subscriber-row cell(s) (no {{{{ }}}} tokens)")

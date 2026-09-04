@@ -80,6 +80,48 @@ class WebBridgeTest(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertEqual(json.loads(self.bridge.get_representative_profile())["full_name"], "LE THI DAI DIEN")
 
+    def test_representative_2_profile_round_trips_independently_of_representative_1(self):
+        incomplete = json.loads(self.bridge.save_representative_2_profile(json.dumps({"full_name": "LE VAN DAI DIEN 2"})))
+        self.assertFalse(incomplete["ok"])
+        self.assertTrue(all(e["path"].startswith("representative_2.") for e in incomplete["errors"]))
+
+        complete = {
+            "full_name": "LE VAN DAI DIEN 2", "id_number": "001090005678", "date_of_birth": "02/02/1985",
+            "issue_date": "02/02/2022", "issue_place": "Cục Cảnh sát QLHC về TTXH",
+            "nationality": "Việt Nam", "address": "20 Xã Đàn, Hà Nội",
+        }
+        result = json.loads(self.bridge.save_representative_2_profile(json.dumps(complete)))
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(json.loads(self.bridge.get_representative_2_profile())["full_name"], "LE VAN DAI DIEN 2")
+        # A completely separate profile from "Người đại diện" 1 -- saving
+        # this one must never touch representative_profile's own record.
+        self.assertNotEqual(
+            json.loads(self.bridge.get_representative_profile())["full_name"], "LE VAN DAI DIEN 2",
+        )
+
+    def test_clear_signature_slots_revert_to_plain_cursive_text(self):
+        # Doesn't go through save_cropped_signature (writes to the real,
+        # non-test-isolated AppData signatures dir -- see _signatures_dir)
+        # -- sets a fake path directly, same effective state.
+        self.bridge.representative_profile.signature_path = "/tmp/fake_representative.png"
+        result = json.loads(self.bridge.clear_representative_signature())
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.bridge.representative_profile.signature_path, "")
+        self.assertEqual(json.loads(self.bridge.get_representative_profile())["signature_path"], "")
+
+        self.bridge.representative_2_profile.signature_path = "/tmp/fake_representative_2.png"
+        result = json.loads(self.bridge.clear_representative_2_signature())
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.bridge.representative_2_profile.signature_path, "")
+        self.assertEqual(json.loads(self.bridge.get_representative_2_profile())["signature_path"], "")
+
+        from desktop_app.frontend.web_bridge import PROVIDER_SIGNATURE_SETTINGS_KEY
+
+        self.bridge.settings.setValue(PROVIDER_SIGNATURE_SETTINGS_KEY, "/tmp/fake_provider.png")
+        result = json.loads(self.bridge.clear_provider_signature())
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(json.loads(self.bridge.get_provider_signature())["signature_path"], "")
+
     def test_dynamic_clerks_cover_seven_services_without_overlap(self):
         profiles = [
             {
@@ -117,7 +159,7 @@ class WebBridgeTest(unittest.TestCase):
 
         default = json.loads(self.bridge.get_document_set_settings())
         self.assertEqual(len(default["services"]), 7)
-        self.assertEqual(len(default["documents"]), 6)
+        self.assertEqual(len(default["documents"]), 7)
         self.assertEqual(
             set(default["selected"][ServiceTemplate.SIM_REPLACEMENT.value]),
             {"aftersale", "sim_change_form"},
@@ -560,6 +602,36 @@ class WebBridgeTest(unittest.TestCase):
         self.assertEqual(sim["customer"]["full_name"], "NGƯỜI TRONG ẢNH 1-3")
         self.assertNotIn("full_name", sim["new_owner"])
 
+    def test_quang_ha_stt_customer_comes_from_representative_2_not_ocr(self):
+        # Bên A ("người thực hiện chuyển chủ quyền") is the fixed "Người
+        # đại diện 2" profile for this service specifically -- unlike
+        # every other template, person123 (the scanned photo) becomes the
+        # NEW subscriber (new_owner), never the customer.
+        complete = {
+            "full_name": "PHAM DAI DIEN HAI", "id_number": "001090009999", "date_of_birth": "03/03/1980",
+            "issue_date": "03/03/2022", "issue_place": "Cục Cảnh sát QLHC về TTXH",
+            "nationality": "Việt Nam", "address": "30 Xã Đàn, Hà Nội",
+        }
+        saved = json.loads(self.bridge.save_representative_2_profile(json.dumps(complete)))
+        self.assertTrue(saved["ok"], saved)
+
+        defaults = self.bridge._default_report_dict()
+        common = {
+            "revision": 1,
+            "person123": {
+                "entity_type": "Cá nhân", "full_name": "THUE BAO MOI QUET QR",
+                "id_number": "001099999993", "nationality": "Việt Nam",
+            },
+        }
+        response = json.loads(self.bridge.on_service_template_changed(json.dumps({
+            "previous_service_template": "", "new_service_template": "quang_ha_stt",
+            "state": {**defaults, "document_type": ""},
+            "common_dossier": common,
+        })))
+        state_patch = response["state_patch"]
+        self.assertEqual(state_patch["customer"]["full_name"], "PHAM DAI DIEN HAI")
+        self.assertEqual(state_patch["new_owner"]["full_name"], "THUE BAO MOI QUET QR")
+
     def test_common_ocr_batches_can_run_in_parallel_but_legacy_scan_still_reports_busy(self):
         with (
             patch.object(self.bridge, "_ocr_busy", return_value=True),
@@ -618,7 +690,7 @@ class WebBridgeTest(unittest.TestCase):
 
     def test_service_source_roles_match_the_correct_numbered_images(self):
         templates = {item["value"]: item for item in json.loads(self.bridge.get_service_templates())}
-        for service in ("prepaid_transfer_org", "commitment_transfer_org"):
+        for service in ("prepaid_transfer_org", "commitment_transfer_org", "quang_ha_stt"):
             self.assertEqual(templates[service]["source_role"], "new_owner_123")
             self.assertEqual(templates[service]["required_images"], [1, 2, 3])
         for service in ("prepaid_transfer_individual", "commitment_transfer_individual"):

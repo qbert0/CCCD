@@ -59,6 +59,7 @@ TEMPLATES = [
     ROOT / "desktop_app/backend/documents/beautiful_number/00_MAU_PHU_LUC_CAM_KET_SO_DEP_editable.docx",
     ROOT / "desktop_app/backend/documents/sim_change_form/00_MAU_PHIEU_THAY_DOI_DICH_VU_TRA_TRUOC.docx",
     ROOT / "desktop_app/backend/documents/ownership_confirmation/00_MAU_GIAY_CAM_KET_XAC_NHAN_QUYEN.docx",
+    ROOT / "desktop_app/backend/documents/service_registration/00_MAU_PHIEU_DANG_KY_DICH_VU.docx",
 ]
 
 DOTS = "....."
@@ -69,6 +70,19 @@ FRAGMENT_SUFFIXES = ("_day", "_month", "_year")
 # suffix match. `transfer_time` is the one genuine hour:minute fragment
 # ("... vào lúc {{ transfer_time }} ngày ...") -- named explicitly instead.
 FRAGMENT_FIELD_NAMES = {"transfer_time"}
+
+# Fields whose own value is a CHECKED_BOX/EMPTY_BOX glyph pair baked
+# directly into the string (prepaid_individual_nationality's own
+# established pattern -- see apply_value_font.py's identically-named
+# set, which skips the JetBrainsMono font swap for the same reason) --
+# not a "_mark"-suffixed token (those drive a SEPARATE static label, this
+# IS the whole printed value), but wrapping one in "....." dots the same
+# way an ordinary text field gets wrapped would be just as wrong as
+# wrapping a "_mark" field.
+CHECKBOX_EMBEDDED_FIELD_NAMES = {
+    "prepaid_individual_nationality", "sim_customer_new_nationality",
+    "service_registration_customer_nationality",
+}
 
 
 def _is_checkbox_field(name: str) -> bool:
@@ -145,7 +159,10 @@ def _bake_paragraph(paragraph: Paragraph) -> int:
         token = joined[match.start():match.end()]
         suffix = runs[end_run].text[end_offset:]
 
-        want_dots = not in_table and not _is_fragment_field(name)
+        want_dots = (
+            not in_table and not _is_fragment_field(name)
+            and name not in CHECKBOX_EMBEDDED_FIELD_NAMES
+        )
         preceding = joined[:match.start()].rstrip()
         is_label = preceding.endswith(":")
 
@@ -182,7 +199,19 @@ def _bake_paragraph(paragraph: Paragraph) -> int:
 
         if end_run == start_run:
             if suffix:
-                _insert_run_after(anchor, paragraph, suffix)
+                # _insert_run_after copies the ANCHOR run's current
+                # formatting via deepcopy -- fine when want_dots (anchor
+                # is by now the just-reset dots run above), but when
+                # want_dots is False (every in-table multi-token cell)
+                # anchor is still token_run itself, so an unreset suffix
+                # run would silently inherit its bold+bigger styling.
+                # Confirmed bug, not hypothetical: reproduced against
+                # this exact template's own row-4-style multi-token cell
+                # before this fix (a trailing "\n- Nhãn kế tiếp: " label
+                # coming out bold+13pt instead of plain 12pt).
+                suffix_run = _insert_run_after(anchor, paragraph, suffix)
+                suffix_run.font.bold = False
+                suffix_run.font.size = base_size
         else:
             for index in range(start_run + 1, end_run):
                 runs[index].text = ""
@@ -206,6 +235,30 @@ BEAUTIFUL_NUMBER_SUBSCRIBER_ROW = (
     ROOT / "desktop_app/backend/documents/beautiful_number/00_MAU_PHU_LUC_CAM_KET_SO_DEP_editable.docx",
     0, 1, (1, 2, 3, 4),
 )
+
+# Same shape as beautiful_number's own row above -- ownership_confirmation's
+# "STT / Số thuê bao / Họ và tên / Số GTTT / Ngày cấp" table clones this
+# ONE template row per subscriber at generation time
+# (_fill_ownership_confirmation_table), so baking it once here is enough;
+# every clone carries the baked formatting along in its copied XML.
+# Column 0 (STT) is bookkeeping, not data -- skipped, same convention.
+OWNERSHIP_CONFIRMATION_SUBSCRIBER_ROW = (
+    ROOT / "desktop_app/backend/documents/ownership_confirmation/00_MAU_GIAY_CAM_KET_XAC_NHAN_QUYEN.docx",
+    0, 1, (1, 2, 3, 4),
+)
+
+# service_registration's own subscriber table is the OTHER shape --
+# _fill_service_registration_table fills 3 FIXED pre-existing rows in
+# place (never clones), so all 3 need baking individually, not just one
+# template row. Column 0 (TT) already carries literal "1"/"2"/"3" text
+# from the build script itself, not a data field -- skipped.
+SERVICE_REGISTRATION_SUBSCRIBER_ROWS = [
+    (
+        ROOT / "desktop_app/backend/documents/service_registration/00_MAU_PHIEU_DANG_KY_DICH_VU.docx",
+        0, row_index, (1, 2, 3),
+    )
+    for row_index in (1, 2, 3)
+]
 
 
 def _bake_known_table_row(path: Path, table_index: int, row_index: int, columns: tuple[int, ...]) -> int:
@@ -238,3 +291,10 @@ if __name__ == "__main__":
 
     extra = _bake_known_table_row(*BEAUTIFUL_NUMBER_SUBSCRIBER_ROW)
     print(f"{BEAUTIFUL_NUMBER_SUBSCRIBER_ROW[0].name}: baked {extra} subscriber-row cell(s) (no {{{{ }}}} tokens)")
+
+    extra = _bake_known_table_row(*OWNERSHIP_CONFIRMATION_SUBSCRIBER_ROW)
+    print(f"{OWNERSHIP_CONFIRMATION_SUBSCRIBER_ROW[0].name}: baked {extra} subscriber-row cell(s) (no {{{{ }}}} tokens)")
+
+    for row in SERVICE_REGISTRATION_SUBSCRIBER_ROWS:
+        extra = _bake_known_table_row(*row)
+        print(f"{row[0].name} row {row[2]}: baked {extra} subscriber-row cell(s) (no {{{{ }}}} tokens)")

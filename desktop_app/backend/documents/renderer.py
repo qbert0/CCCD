@@ -342,6 +342,36 @@ SIGNATURE_IMAGE_SLOTS = (
         "aftersale_requester_signature_given_name", "aftersale_requester_signature_name",
         "customer.signature_path",
     ),
+    # _common_context's own shared "customer" signature (beautiful_number,
+    # sim_change_form, service_registration) -- same customer.signature_path
+    # source as aftersale_requester above, just under the shared key name.
+    # Missing this entry meant an uploaded signature (e.g. Representative
+    # 2's, for QUANG_HA_STT -- see representative_2_profile.py) was never
+    # actually applied to these 3 document types: they always fell back to
+    # the plain cursive-text name even once an image existed.
+    (
+        "customer_signature_given_name", "customer_signature_name",
+        "customer.signature_path",
+    ),
+    # ownership_confirmation's own 2-signer block -- same 2 roles/sources
+    # as everywhere else (customer signs for themselves, the clerk uses
+    # whichever OperatorProfile is on duty), just under this document's
+    # own prefixed key names. Missing before now for the same reason
+    # customer_signature_name was: never added when this document type
+    # was built, so an uploaded image was silently ignored here too.
+    (
+        "ownership_requester_signature_given_name", "ownership_requester_signature_name",
+        "customer.signature_path",
+    ),
+    (
+        "ownership_clerk_signature_given_name", "ownership_clerk_signature_name",
+        "operator_signature_path",
+    ),
+    # service_registration's own clerk signer -- same gap, same fix.
+    (
+        "service_registration_clerk_signature_given_name", "service_registration_clerk_signature_name",
+        "operator_signature_path",
+    ),
 )
 SIGNATURE_IMAGE_HEIGHT = Mm(32)  # doubled from the original Mm(16) per direct instruction; the x1.5 bump to 48 was reverted as too large
 
@@ -551,6 +581,55 @@ def _fill_prepaid_sim_table(document: Document, data: ReportData) -> None:
             values = rows[index] if index < len(rows) else {}
             for cell, name in zip(
                 table_row.cells,
+                ("subscriber_number", "sim_serial", "activation_date"),
+            ):
+                _set_cell_text_preserving_style(cell, values.get(name, ""), name)
+        break
+
+
+def _service_registration_rows(data: ReportData) -> list[dict[str, str]]:
+    rows = [
+        {
+            "subscriber_number": str(row.get("subscriber_number", "") or ""),
+            "sim_serial": str(row.get("sim_serial", "") or ""),
+            "activation_date": str(row.get("activation_date", "") or ""),
+        }
+        for row in data.subscribers
+        if str(row.get("subscriber_number", "") or "").strip()
+    ]
+    if rows:
+        return rows
+    return [{
+        "subscriber_number": data.subscriber_number,
+        "sim_serial": data.sim_serial,
+        "activation_date": data.activation_date,
+    }]
+
+
+def _fill_service_registration_table(document: Document, data: ReportData) -> None:
+    """Fill the FIXED 3 pre-existing "TT / Số thuê bao / Số sê-ri SIM /
+    Ngày hòa mạng" rows in place -- same non-cloning approach as
+    _fill_prepaid_sim_table, except this table (unlike prepaid's own,
+    which has no index column) has its own leading "TT" column, so
+    column 0 gets the row's 1-based index (like _fill_beautiful_number_table/
+    _fill_ownership_confirmation_table's own column 0) and only columns
+    1-3 come from `rows`. Genuinely bounded at 3 (the reference form is
+    explicitly "Áp dụng trong trường hợp Khách hàng đăng ký 03 số thuê
+    bao đầu tiên"), not the unbounded clone-per-entry shape those two
+    functions use."""
+    rows = _service_registration_rows(data)
+    for table in document.tables:
+        if not table.rows:
+            continue
+        header = " | ".join(cell.text for cell in table.rows[0].cells)
+        if "Số thuê bao" not in header or "Số sê-ri SIM" not in header:
+            continue
+        for index, table_row in enumerate(table.rows[1:4]):
+            values = rows[index] if index < len(rows) else {}
+            cells = table_row.cells
+            _set_cell_text_preserving_style(cells[0], str(index + 1))
+            for cell, name in zip(
+                cells[1:],
                 ("subscriber_number", "sim_serial", "activation_date"),
             ):
                 _set_cell_text_preserving_style(cell, values.get(name, ""), name)
@@ -804,6 +883,8 @@ def _generate_docx(
         _fill_transfer_subscriber_table(document, data)
     elif data.document_type == DocumentType.OWNERSHIP_CONFIRMATION:
         _fill_ownership_confirmation_table(document, data)
+    elif data.document_type == DocumentType.SERVICE_REGISTRATION:
+        _fill_service_registration_table(document, data)
 
     if data.document_type == DocumentType.TRANSFER and document.tables:
         table_size = 8.5 if (

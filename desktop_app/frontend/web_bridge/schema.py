@@ -117,10 +117,13 @@ def resolve_company_profile_layout() -> dict:
     return {"primary_rows": rows, "detail_rows": [], "has_detail": False}
 
 
-def resolve_representative_profile_layout() -> dict:
-    """Reusable 3-row personal form for the persisted representative."""
+def resolve_representative_profile_layout(prefix: str = "representative") -> dict:
+    """Reusable 3-row personal form for a persisted representative profile.
+    `prefix` selects which field paths the rows bind to -- "representative"
+    for "Người đại diện" (the default, unchanged), "representative_2" for
+    the independent "Người đại diện 2" profile used by QUANG_HA_STT."""
     resolved = resolve_person_information_form()
-    rows = _person_rows_to_descriptors("representative", resolved["primary_rows"], resolved["required"])
+    rows = _person_rows_to_descriptors(prefix, resolved["primary_rows"], resolved["required"])
     return {"primary_rows": rows, "detail_rows": [], "has_detail": False}
 
 
