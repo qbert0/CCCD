@@ -45,6 +45,7 @@ TEMPLATES = [
     ROOT / "desktop_app/backend/documents/prepaid_contract/00_MAU_HOP_DONG_TRA_TRUOC.docx",
     ROOT / "desktop_app/backend/documents/beautiful_number/00_MAU_PHU_LUC_CAM_KET_SO_DEP_editable.docx",
     ROOT / "desktop_app/backend/documents/sim_change_form/00_MAU_PHIEU_THAY_DOI_DICH_VU_TRA_TRUOC.docx",
+    ROOT / "desktop_app/backend/documents/ownership_confirmation/00_MAU_GIAY_CAM_KET_XAC_NHAN_QUYEN.docx",
 ]
 
 VALUE_FONT_SIZE = Pt(12)
@@ -70,6 +71,8 @@ DATE_FIELD_NAMES = {
     "prepaid_individual_issue_date", "prepaid_individual_birth_date",
     "sim_customer_birth_date", "sim_customer_issue_date",
     "sim_request_date_line", "sim_document_date_line",
+    "ownership_day", "ownership_month", "ownership_year",
+    "ownership_customer_issue_date",
 }
 
 # renderer.py's prepaid_individual_nationality bakes a CHECKED_BOX/EMPTY_BOX

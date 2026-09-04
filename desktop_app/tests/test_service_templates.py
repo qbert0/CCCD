@@ -20,14 +20,20 @@ class ServiceTemplateTest(unittest.TestCase):
             DocumentType.BEAUTIFUL_NUMBER,
             DocumentType.PREPAID_CONTRACT,
         ]
+        expected_sim = [DocumentType.AFTERSALE, DocumentType.SIM_CHANGE_FORM]
+        # The 2 Quang Hà variants each extend one of the two shapes above
+        # with one extra document type (see models.py's own comment on
+        # SERVICE_TEMPLATE_DOCUMENTS) -- not a plain 4-doc/2-doc mẫu.
+        expected_by_template = {
+            ServiceTemplate.SIM_REPLACEMENT: expected_sim,
+            ServiceTemplate.QUANG_HA_STT: expected_transfer + [DocumentType.OWNERSHIP_CONFIRMATION],
+            ServiceTemplate.QUANG_HA_SIM_CK: expected_sim + [DocumentType.BEAUTIFUL_NUMBER],
+        }
         for template in ServiceTemplate:
-            if template == ServiceTemplate.SIM_REPLACEMENT:
-                self.assertEqual(
-                    SERVICE_TEMPLATE_DOCUMENTS[template],
-                    [DocumentType.AFTERSALE, DocumentType.SIM_CHANGE_FORM],
-                )
-            else:
-                self.assertEqual(SERVICE_TEMPLATE_DOCUMENTS[template], expected_transfer)
+            self.assertEqual(
+                SERVICE_TEMPLATE_DOCUMENTS[template],
+                expected_by_template.get(template, expected_transfer),
+            )
 
     def test_numbered_image_requirements_follow_party_type(self):
         self.assertEqual(required_input_numbers(ServiceTemplate.PREPAID_TRANSFER_ORG), (1, 2, 3))

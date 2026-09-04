@@ -667,16 +667,25 @@ class WebBridge(QObject):
             },
         })
 
-    @pyqtSlot(str, str, result=str)
-    def submit_folder_images(self, target: str, paths_json: str) -> str:
-        """Run the OCR pipeline for paths resolved by choose_source_folder."""
+    @pyqtSlot(str, str, bool, result=str)
+    def submit_folder_images(self, target: str, paths_json: str, append: bool = False) -> str:
+        """Run the OCR pipeline for paths resolved by choose_source_folder.
+
+        `append=False` (the default): a folder submission is a replacement
+        dossier, not an incremental upload -- never combine one newly
+        selected side with the other side left over from the previous
+        folder. `append=True` is the one deliberate exception: the
+        follow-up back-image scan readCommonPerson() (app.js) issues on
+        the SAME target after the front image's QR failed -- it must add
+        to the front's already-accepted result, not wipe it out from under
+        the in-flight batch."""
         allow_parallel = target.startswith("common_")
         if self._ocr_busy() and not allow_parallel:
             return json.dumps({"started": False, "message": "Một lần đọc ảnh khác đang hoàn tất"})
-        # A folder submission is a replacement dossier, not an incremental
-        # upload. Never combine one newly selected side with the other side
-        # left over from the previous folder.
-        self._accepted_files[target] = {}
+        if append:
+            self._accepted_files.setdefault(target, {})
+        else:
+            self._accepted_files[target] = {}
         paths = [Path(p) for p in json.loads(paths_json)]
         started = self._start_ocr(target, paths)
         return json.dumps({"started": started, "message": "" if started else "Không có ảnh để đọc"})
@@ -817,7 +826,9 @@ class WebBridge(QObject):
                 "documents": [
                     DOCUMENT_SHORT_NAMES[item] for item in self.document_set_overrides[template]
                 ],
-                "requires_new_owner": template != ServiceTemplate.SIM_REPLACEMENT,
+                "requires_new_owner": template not in {
+                    ServiceTemplate.SIM_REPLACEMENT, ServiceTemplate.QUANG_HA_SIM_CK,
+                },
                 "required_images": list(required_input_numbers(template)),
                 "source_role": (
                     "new_owner_123"
@@ -826,7 +837,7 @@ class WebBridge(QObject):
                         ServiceTemplate.COMMITMENT_TRANSFER_ORG,
                     }
                     else "requester_123"
-                    if template == ServiceTemplate.SIM_REPLACEMENT
+                    if template in {ServiceTemplate.SIM_REPLACEMENT, ServiceTemplate.QUANG_HA_SIM_CK}
                     else "old_123_new_456"
                 ),
                 "requires_monthly_fee": template != ServiceTemplate.SIM_REPLACEMENT,

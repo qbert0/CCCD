@@ -36,6 +36,36 @@ class WebBridgeTest(unittest.TestCase):
         self.bridge.company_profile = PersonData()
         self.bridge.representative_profile = PersonData()
 
+    def _run_generation(self, template: str, state: dict, folder: str) -> dict:
+        """generate_service_template_documents now only dispatches a
+        background DocumentGenerationWorker and returns {"ok": True,
+        "job_id": ...} immediately -- the real result (paths/errors)
+        arrives later via the generationFinished signal. Dispatch itself
+        can also fail synchronously (overloaded / missing source images),
+        in which case there's no job_id and nothing to wait for."""
+        from PyQt5.QtCore import QEventLoop, QTimer
+
+        dispatch = json.loads(self.bridge.generate_service_template_documents(
+            template, json.dumps(state), folder,
+        ))
+        if not dispatch.get("job_id"):
+            return dispatch
+
+        captured = {}
+
+        def on_finished(job_id, result_json):
+            if job_id == dispatch["job_id"]:
+                captured["result"] = json.loads(result_json)
+                loop.quit()
+
+        self.bridge.generationFinished.connect(on_finished)
+        loop = QEventLoop()
+        QTimer.singleShot(30000, loop.quit)
+        loop.exec_()
+        self.bridge.generationFinished.disconnect(on_finished)
+        self.assertIn("result", captured, "generationFinished never fired within 30s")
+        return captured["result"]
+
     def test_representative_profile_round_trips_and_validates(self):
         incomplete = json.loads(self.bridge.save_representative_profile(json.dumps({"full_name": "LE THI DAI DIEN"})))
         self.assertFalse(incomplete["ok"])
@@ -50,7 +80,7 @@ class WebBridgeTest(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertEqual(json.loads(self.bridge.get_representative_profile())["full_name"], "LE THI DAI DIEN")
 
-    def test_dynamic_clerks_cover_five_services_without_overlap(self):
+    def test_dynamic_clerks_cover_seven_services_without_overlap(self):
         profiles = [
             {
                 "profile_id": "operator_1",
@@ -58,19 +88,20 @@ class WebBridgeTest(unittest.TestCase):
                 "service_templates": [
                     "prepaid_transfer_org", "prepaid_transfer_individual",
                     "commitment_transfer_individual", "commitment_transfer_org",
+                    "quang_ha_stt",
                 ],
             },
             {
                 "profile_id": "operator_2",
                 "name": "TRẦN THAY SIM",
-                "service_templates": ["sim_replacement"],
+                "service_templates": ["sim_replacement", "quang_ha_sim_ck"],
             },
         ]
         result = json.loads(self.bridge.save_operator_profiles(json.dumps(profiles)))
         self.assertTrue(result["ok"], result)
         payload = json.loads(self.bridge.get_operator_profiles())
         self.assertEqual(len(payload["profiles"]), 2)
-        self.assertEqual(len(payload["services"]), 5)
+        self.assertEqual(len(payload["services"]), 7)
 
         duplicate = [dict(item) for item in profiles]
         duplicate[1] = {
@@ -85,8 +116,8 @@ class WebBridgeTest(unittest.TestCase):
         from desktop_app.backend.domain.models import ServiceTemplate
 
         default = json.loads(self.bridge.get_document_set_settings())
-        self.assertEqual(len(default["services"]), 5)
-        self.assertEqual(len(default["documents"]), 5)
+        self.assertEqual(len(default["services"]), 7)
+        self.assertEqual(len(default["documents"]), 6)
         self.assertEqual(
             set(default["selected"][ServiceTemplate.SIM_REPLACEMENT.value]),
             {"aftersale", "sim_change_form"},
@@ -421,12 +452,13 @@ class WebBridgeTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["subscriber_number"], "0925123456")
 
-    def test_get_service_templates_lists_all_five_mau(self):
+    def test_get_service_templates_lists_all_seven_mau(self):
         templates = json.loads(self.bridge.get_service_templates())
-        self.assertEqual(len(templates), 5)
+        self.assertEqual(len(templates), 7)
         self.assertEqual({t["value"] for t in templates}, {
             "prepaid_transfer_org", "prepaid_transfer_individual",
             "commitment_transfer_individual", "commitment_transfer_org", "sim_replacement",
+            "quang_ha_stt", "quang_ha_sim_ck",
         })
 
     def test_on_service_template_changed_sets_entity_types_and_document_set(self):
@@ -614,9 +646,7 @@ class WebBridgeTest(unittest.TestCase):
             for number in range(1, 7):
                 Path(folder, f"{number}.jpg").write_bytes(b"source")
             self.bridge._last_source_dir = folder
-            result = json.loads(self.bridge.generate_service_template_documents(
-                "commitment_transfer_individual", json.dumps(state), folder,
-            ))
+            result = self._run_generation("commitment_transfer_individual", state, folder)
         self.assertEqual(
             [error["path"] for error in result["errors"]],
             ["subscribers.0.monthly_fee", "subscribers.0.subscriber_number"],
@@ -721,17 +751,13 @@ class WebBridgeTest(unittest.TestCase):
             for number in (1, 2, 3):
                 Path(folder, f"{number}.jpg").write_bytes(b"source")
             self.bridge._last_source_dir = folder
-            result = json.loads(
-                self.bridge.generate_service_template_documents("sim_replacement", json.dumps(state), folder)
-            )
+            result = self._run_generation("sim_replacement", state, folder)
             self.assertTrue(result["ok"], result)
             self.assertEqual(len(result["paths"]), 2)
             self.assertEqual(Path(result["paths"][0]).name, "7.jpg")
             self.assertEqual(Path(result["paths"][1]).name, "8.jpg")
             Path(folder, "9.jpg").write_bytes(b"stale generated page")
-            repeated = json.loads(
-                self.bridge.generate_service_template_documents("sim_replacement", json.dumps(state), folder)
-            )
+            repeated = self._run_generation("sim_replacement", state, folder)
             self.assertTrue(repeated["ok"], repeated)
             self.assertEqual(Path(repeated["paths"][0]).name, "7.jpg")
             self.assertEqual(Path(repeated["paths"][1]).name, "8.jpg")
@@ -748,11 +774,7 @@ class WebBridgeTest(unittest.TestCase):
                 "desktop_app.frontend.web_bridge.shutil.copy2",
                 side_effect=OSError("simulated commit failure"),
             ):
-                failed_commit = json.loads(
-                    self.bridge.generate_service_template_documents(
-                        "sim_replacement", json.dumps(state), folder
-                    )
-                )
+                failed_commit = self._run_generation("sim_replacement", state, folder)
             self.assertFalse(failed_commit["ok"])
             self.assertEqual(old_page.read_bytes(), b"old page 7")
             self.assertEqual(old_extra.read_bytes(), b"old page 8")
@@ -763,9 +785,7 @@ class WebBridgeTest(unittest.TestCase):
             for number in (1, 2, 3):
                 Path(folder, f"{number}.jpg").write_bytes(b"source")
             self.bridge._last_source_dir = folder
-            result = json.loads(
-                self.bridge.generate_service_template_documents("sim_replacement", json.dumps(state), folder)
-            )
+            result = self._run_generation("sim_replacement", state, folder)
             self.assertFalse(result["ok"])
             self.assertTrue(any(e["path"] == "customer.full_name" for e in result["errors"]))
 

@@ -145,6 +145,7 @@
         upload[result.side] = {
           thumbnail: result.thumbnail_data_url,
           filename: `${result.filename} · ${result.source}`,
+          source: result.source,
         };
         CCCD.mergeNonEmpty(state.commonDossier[`person${slot.number}`], result.fields);
       });
@@ -321,14 +322,14 @@
         }
       },
       async readCommonPerson(slotNumber, frontNumber, revision, paths) {
-        // Only the front image is OCR'd. Its QR code alone already carries
-        // id number, full name, DOB, gender, address and (usually) issue
-        // date; the back needs the much slower PaddleOCR/VietOCR path
-        // (no QR there) for fields that are either unused in generated
-        // documents (hometown) or already have a sane default
-        // (issue_place). The back/portrait files themselves are still
-        // kept and copied into the dossier -- they're just never sent
-        // through OCR.
+        // The front image is always OCR'd first. Its QR code alone
+        // already carries id number, full name, DOB, gender, address and
+        // (usually) issue date, near-instantly -- so if it decodes, the
+        // back is skipped entirely (still kept and copied into the
+        // dossier, just never sent through the much slower
+        // PaddleOCR/VietOCR path). Only when the front had no QR to fall
+        // back on do we pay for reading the back too, for the fields that
+        // only ever come from there (e.g. expiry_date).
         const target = `common_${slotNumber}:${revision}`;
         const frontPath = paths[frontNumber];
         if (!frontPath) return;
@@ -342,6 +343,23 @@
           return;
         }
         await pending;
+
+        const upload = state.commonDossier[`upload${slotNumber}`];
+        const frontSource = upload?.front?.source || upload?.back?.source || "";
+        const backPath = paths[frontNumber + 1];
+        if (frontSource === "QR CCCD" || !backPath) return;
+
+        // append: true -- this reuses the SAME target as the front scan
+        // above, so submit_folder_images must not reset _accepted_files
+        // for it (that would silently drop the front's already-accepted
+        // result out from under this in-flight dossier).
+        const backPending = this.waitForOcrBatch(target);
+        const backStart = await CCCD.bridge.submitFolderImages(target, [backPath], true);
+        if (!backStart?.started) {
+          backPending.cancel();
+          return;
+        }
+        await backPending;
       },
       async processCommonSourceImages(revision, paths) {
         const batches = [this.readCommonPerson("123", 1, revision, paths)];
@@ -510,6 +528,12 @@
           for (const error of result.errors) state.ui.errors[error.path] = error.message;
           return;
         }
+        // Propagate into whatever service form is already open, the same
+        // way an OCR scan already does live via commonDossier -- was
+        // previously only reachable by the user manually clicking "↻ Nạp
+        // lại mặc định" (updateFromProfileDefaults), one of the two
+        // genuinely disconnected common-store paths this was auditing.
+        if (state.service_template) await this.onServiceTemplateChange(state.service_template);
         CCCD.pushToast("Đã lưu thông tin công ty mặc định", "success");
       },
       async saveRepresentativeProfile() {
@@ -518,6 +542,7 @@
           for (const error of result.errors) state.ui.errors[error.path] = error.message;
           return;
         }
+        if (state.service_template) await this.onServiceTemplateChange(state.service_template);
         CCCD.pushToast("Đã lưu người đại diện mặc định", "success");
       },
       addOperatorProfile() {
@@ -611,13 +636,11 @@
           CCCD.pushToast(result?.message || "Không lưu được người làm thủ tục", "error");
           return;
         }
-        const selected = this.operatorProfiles.profiles.find(
-          (item) => item.service_templates.includes(state.service_template),
-        );
-        if (selected) {
-          state.staff_name = selected.name;
-          state.operator_signature_path = selected.signature_path;
-        }
+        // onServiceTemplateChange's own state_patch already re-derives
+        // staff_name/operator_signature_path server-side (operator_for_service,
+        // web_bridge/__init__.py) from the operator_profiles just saved --
+        // one source of truth instead of duplicating that same lookup here.
+        if (state.service_template) await this.onServiceTemplateChange(state.service_template);
         CCCD.pushToast("Đã lưu giao dịch viên và phân công 5 dịch vụ", "success");
       },
       async saveDocumentSetSettings() {

@@ -30,6 +30,7 @@ def required_input_numbers(template: ServiceTemplate) -> tuple[int, ...]:
         ServiceTemplate.PREPAID_TRANSFER_ORG,
         ServiceTemplate.COMMITMENT_TRANSFER_ORG,
         ServiceTemplate.SIM_REPLACEMENT,
+        ServiceTemplate.QUANG_HA_SIM_CK,
     }:
         return (PRIMARY_FRONT, PRIMARY_BACK, PRIMARY_PHOTO)
     return (

@@ -127,11 +127,30 @@ def _paragraph_is_in_table(paragraph: Paragraph) -> bool:
     return any(ancestor.tag == qn("w:tc") for ancestor in paragraph._p.iterancestors())
 
 
+def dotted(value: str, length: int = 20) -> str:
+    """A blank line of dots when `value` is empty, the value itself
+    otherwise -- shared with _docx_context's own identical local closure
+    (same reasoning as choice_mark just below: pure function, safe to
+    export for migrated per-module build_context() implementations)."""
+    text = str(value or "").strip()
+    return text if text else "." * length
+
+
+def choice_mark(selected: bool) -> str:
+    """Shared with _docx_context's own identical local closure (untouched,
+    legacy path) -- a plain pure function, safe to also export for
+    per-module build_context() implementations (see base.py) migrated off
+    that monolith one document type at a time."""
+    return CHECKED_BOX if selected else EMPTY_BOX
+
+
 def _given_name(full_name: str) -> str:
     """The last space-separated token of a Vietnamese full name -- the
     "tên" (given/call name) a person actually signs with, not the whole
     name. Printed in the Great Vibes script font as the "ký tên" stroke
-    that sits above the full "ghi rõ họ tên" line (see SIGNATURE_GIVEN_NAME_SOURCES)."""
+    that sits above the full "ghi rõ họ tên" line -- each per-module
+    build_context() (see base.py) derives its own *_given_name keys with
+    this, right next to the *_name value they come from."""
     parts = str(full_name or "").split()
     return parts[-1] if parts else ""
 
@@ -280,30 +299,6 @@ def _style_docx_checkbox_symbols(paragraph: Paragraph) -> None:
             if part in {CHECKED_BOX, EMPTY_BOX}:
                 _set_symbol_font(new_run)
 
-
-# Every printed signature has 2 lines: "ký tên" (the given name alone, in
-# the Great Vibes script font -- the actual signature stroke) above "ghi
-# rõ họ tên" (the full name, same font). Real signature images used to
-# stand in for the "ký tên" line; now that a script font can do the job,
-# each of these source keys (already a full name, already computed above)
-# gets a "_given_name" companion holding just the last word.
-SIGNATURE_GIVEN_NAME_SOURCES = (
-    ("customer_signature_name", "customer_signature_given_name"),
-    ("customer_representative_signature_name", "customer_representative_signature_given_name"),
-    ("new_owner_signature_name", "new_owner_signature_given_name"),
-    ("aftersale_requester_signature_name", "aftersale_requester_signature_given_name"),
-    ("aftersale_new_owner_signature_name", "aftersale_new_owner_signature_given_name"),
-    ("aftersale_clerk_signature_name", "aftersale_clerk_signature_given_name"),
-    ("prepaid_party_a_signature_name", "prepaid_party_a_signature_given_name"),
-    # NOT "provider_representative" itself -- that key is ALSO printed
-    # as a plain info mention in prepaid_contract ("Người đại diện: {{
-    # provider_representative }}  Chức vụ: ..."), and a signature-block
-    # key must never be shared with a plain-info one (see
-    # provider_representative_signature below: same value, own key, so
-    # the image/blanking logic in _apply_signature_images can never
-    # reach the info mention no matter how paragraph shapes shift).
-    ("provider_representative_signature", "provider_representative_signature_given_name"),
-)
 
 # Signature slots that can OPTIONALLY be a real image instead of the
 # script-font text lines above -- (given_name key, full_name key, the
@@ -462,53 +457,11 @@ def _apply_signature_images(paragraphs: list[Paragraph], data: ReportData) -> No
                 _clear_paragraph_text(paragraph)
 
 
-def _docx_context(data: ReportData) -> dict[str, str]:
-    customer, new_owner = data.customer, data.new_owner
-    prepaid_structured = (
-        data.document_type == DocumentType.PREPAID_CONTRACT
-        and data.prepaid_structured_parties
-    )
-    prepaid_representative = data.representative if prepaid_structured else customer
-    prepaid_individual = new_owner if prepaid_structured else customer
-    is_organization = customer.entity_type == "Tổ chức"
-    day, month, year = _date_parts(data.document_date)
-    sim_request_day, sim_request_month, sim_request_year = _date_parts(data.document_date)
-    def authorization(person) -> str:
-        return " - ".join(value for value in (person.authorization_number, person.authorization_date) if value)
-
-    def organization(value: str) -> str:
-        return value if prepaid_structured or is_organization else ""
-
-    def individual(value: str) -> str:
-        return value if prepaid_structured or not is_organization else ""
-
-    def party_organization(person, value: str) -> str:
-        return value if person.entity_type == "Tổ chức" else ""
-
-    def dotted(value: str, length: int = 20) -> str:
-        text = str(value or "").strip()
-        return text if text else "." * length
-
-    def action_value(action: str, value: str, length: int = 20) -> str:
-        return dotted(value, length) if data.service_action == action else "." * length
-
-    def choice_mark(selected: bool) -> str:
-        return CHECKED_BOX if selected else EMPTY_BOX
-
-    # Up to 3 ordered organization contact numbers, joined into the single
-    # "Điện thoại: ..." slot every template already has -- shop_phone_2/3
-    # simply don't add anything to the line when left blank.
-    organization_phones = " - ".join(
-        value for value in (data.shop_phone, data.shop_phone_2, data.shop_phone_3) if value
-    )
+def _subscriber_numbers_joined(data: ReportData) -> str:
     # The mẫu (ServiceTemplate) workflow's canonical subscriber list, joined
-    # into one string -- Transfer and Aftersale each only ever had room for
-    # ONE number's worth of prose per blank, so "gộp chung khi có thể" for
-    # them means joining every number into that same blank (same idea as
-    # organization_phones above), not inserting a table (Aftersale has none)
-    # or cloning prose paragraphs. Falls back to the legacy scalar field
-    # when the list is empty, so old saved cases/tests render identically.
-    subscriber_numbers_joined = (
+    # into one string -- falls back to the legacy scalar field when the
+    # list is empty, so old saved cases/tests render identically.
+    return (
         ", ".join(
             str(row.get("subscriber_number", "")).strip()
             for row in data.subscribers
@@ -517,289 +470,36 @@ def _docx_context(data: ReportData) -> dict[str, str]:
         or data.subscriber_number
     )
 
-    effective_day, effective_month, effective_year = _date_parts(data.transfer_effective_date)
-    contract_day, contract_month, contract_year = _date_parts(data.source_contract_date)
-    form_day, form_month, form_year = _date_parts(data.registration_form_date)
-    aftersale_day, aftersale_month, aftersale_year = _date_parts(data.document_date)
-    transfer_basis = []
-    if data.source_contract_number:
-        transfer_basis.append(
-            "Căn cứ hợp đồng cung cấp và sử dụng dịch vụ thông tin di động mặt đất "
-            f"Vietnamobile (hình thức thanh toán {dotted(data.payment_method, 12)}) số: "
-            f"{data.source_contract_number}, ngày {contract_day} tháng {contract_month} năm {contract_year}"
-        )
-    if data.registration_form_date:
-        transfer_basis.append(
-            "Phiếu đăng ký dịch vụ và bản xác nhận thông tin thuê bao Vietnamobile trả trước "
-            f"ngày {form_day} tháng {form_month} năm {form_year}"
-        )
 
+def _common_context(data: ReportData) -> dict[str, str]:
+    """Placeholder values genuinely shared by 2+ document types -- verified
+    directly against every module's own `placeholders` set (see the
+    DocumentRegistry-based audit that produced this exact list), not
+    guessed: everything else is already, by construction, specific to
+    exactly one document type. Every document module's build_context()
+    (see base.py, an abstractmethod every BaseDocumentModule subclass
+    implements) merges this in first, then adds its own fields.
+
+    "provider_representative_signature" deliberately duplicates
+    data.provider_representative under its own key rather than reusing
+    "provider_representative" itself -- that value is ALSO printed as a
+    plain info mention in prepaid_contract ("Người đại diện: {{
+    provider_representative }}  Chức vụ: ..."), and a signature-block key
+    must never be shared with a plain-info one (see
+    _apply_signature_images), or an uploaded signature image/blanking
+    meant for the signature block could reach the info mention instead.
+    """
+    customer = data.customer
     context = {
-        "document_date_line": f"Ngày {day} tháng {month} năm {year}",
-        # Aftersale keeps every legal sentence in the DOCX.  These values only
-        # fill individual blanks; missing values deliberately become dotted lines.
-        "aftersale_day": dotted(aftersale_day, 4),
-        "aftersale_month": dotted(aftersale_month, 4),
-        "aftersale_year": dotted(aftersale_year, 6),
-        "aftersale_shop_address": dotted(data.shop_address, 42),
-        "aftersale_shop_phone": dotted(
-            " - ".join(value for value in (data.shop_phone, data.shop_phone_2) if value), 24
-        ),
-        # This is the form's "Khách hàng / Người yêu cầu" identity, not an
-        # unconditional shop identity. Organization services naturally use
-        # the saved company profile; individual transfers and SIM
-        # replacement use the scanned current owner.
-        "aftersale_customer_name": dotted(customer.display_name().upper(), 46),
-        "aftersale_customer_id_number": dotted(
-            customer.business_registration_number if is_organization else customer.id_number, 18
-        ),
-        "aftersale_customer_issue_date": dotted(
-            customer.business_registration_issue_date if is_organization else customer.issue_date, 14
-        ),
-        "aftersale_customer_issue_place": dotted(
-            customer.business_registration_issue_place if is_organization else customer.issue_place, 26
-        ),
-        "aftersale_customer_address": dotted(
-            customer.headquarters_address if is_organization else customer.address, 48
-        ),
-        "aftersale_customer_phone": dotted(
-            " - ".join(value for value in (customer.phone, customer.phone_2) if value), 24
-        ),
-        "aftersale_representative_name": dotted(data.provider_representative, 30),
-        # The 3 aftersale signature-table names. "Người yêu cầu" is
-        # deliberately NOT always the customer: when the old owner is an
-        # organization (customer.entity_type == "Tổ chức"), an org can't
-        # physically sign, so its own representative_name signs on its
-        # behalf; when the old owner is an individual, they sign for
-        # themselves. "Chủ thuê bao mới" is always the new owner, in both
-        # cases -- confirmed directly by the shop's own usage.
-        "aftersale_requester_signature_name": (
-            customer.representative_name if is_organization else customer.display_name()
-        ).upper(),
-        "aftersale_new_owner_signature_name": new_owner.display_name().upper(),
-        "aftersale_clerk_signature_name": data.staff_name.upper(),
-        "id_attachment_mark": choice_mark(data.has_id_attachment),
-        "sim_attachment_mark": choice_mark(data.has_original_sim),
-        "other_attachment_mark": choice_mark(bool(data.other_attachment.strip())),
-        "other_attachment_value": dotted(data.other_attachment, 48),
-        "update_information_mark": choice_mark(data.service_action == "Cập nhật thông tin"),
-        "update_subscriber_number": action_value(
-            "Cập nhật thông tin", subscriber_numbers_joined, 30
-        ),
-        "replace_sim_mark": choice_mark(data.service_action == "Thay SIM"),
-        "replace_sim_subscriber_number": action_value("Thay SIM", subscriber_numbers_joined, 30),
-        "transfer_mark": choice_mark(data.service_action == "Chuyển chủ quyền"),
-        "transfer_subscriber_number": action_value(
-            "Chuyển chủ quyền", subscriber_numbers_joined, 22
-        ),
-        "transfer_new_owner_name": action_value(
-            "Chuyển chủ quyền", new_owner.display_name().upper(), 28
-        ),
-        "transfer_new_owner_id_number": action_value(
-            "Chuyển chủ quyền", new_owner.id_number, 20
-        ),
-        "transfer_new_owner_issue_date": action_value(
-            "Chuyển chủ quyền", new_owner.issue_date, 14
-        ),
-        "transfer_new_owner_issue_place": action_value(
-            "Chuyển chủ quyền", new_owner.issue_place, 24
-        ),
-        "requester_role_mark": choice_mark(data.service_action != "Chuyển chủ quyền"),
-        "new_owner_role_mark": choice_mark(data.service_action == "Chuyển chủ quyền"),
-        "common_subscriber_number": dotted(subscriber_numbers_joined, 24),
-        "backup_phone_1_line": dotted(data.backup_phone_1 or customer.phone, 20),
-        "backup_phone_2_line": dotted(data.shop_phone_2, 20),
-        "aftersale_staff_name": dotted(data.staff_name, 24),
-        "document_day": f" {day}",
-        "document_month": month,
-        "document_year": year,
-        "beautiful_number_day": day,
-        "beautiful_number_month": month,
-        "beautiful_number_year": year,
-        "beautiful_number_customer_name": customer.display_name().title(),
-        "beautiful_number_customer_id": customer.id_number,
-        "payment_method": data.payment_method,
-        "source_contract_number": data.source_contract_number or "…………",
-        "source_contract_day": contract_day,
-        "source_contract_month": contract_month,
-        "source_contract_year": f"{contract_year} ",
-        "registration_form_day": f" {form_day}",
-        "registration_form_month": form_month,
-        "registration_form_year": form_year,
-        "transfer_time": f"{_hour_only(data.transfer_time) or '……'} ",
-        "transfer_effective_day": effective_day,
-        "transfer_effective_month": effective_month,
-        "transfer_effective_year": effective_year,
-        "shop_name": data.shop_name,
-        "shop_address": data.provider_unit_address if prepaid_structured else data.shop_address,
-        "shop_phone": data.service_point_phone if prepaid_structured else organization_phones,
-        "customer_signature_name": customer.display_name().upper(),
-        "customer_representative_signature_name": (
-            customer.full_name or customer.representative_name
-        ).upper(),
-        "new_owner_signature_name": new_owner.display_name().upper(),
-        "customer_name": customer.display_name().upper(),
-        "customer_headquarters": party_organization(customer, customer.headquarters_address),
-        "customer_business_number": party_organization(customer, customer.business_registration_number),
-        "customer_representative": party_organization(
-            customer, (customer.full_name or customer.representative_name).upper()
-        ),
-        "customer_authorization": party_organization(customer, authorization(customer)),
-        "customer_id_number": customer.id_number,
-        "customer_issue_date": customer.issue_date,
-        "customer_issue_place": customer.issue_place,
-        "customer_birth_date": customer.date_of_birth,
-        "customer_address": customer.address,
-        "customer_nationality": customer.nationality,
-        "customer_phone": customer.phone,
-        "new_owner_name": new_owner.display_name().upper(),
-        "new_owner_headquarters": party_organization(new_owner, new_owner.headquarters_address),
-        "new_owner_business_number": party_organization(new_owner, new_owner.business_registration_number),
-        "new_owner_representative": party_organization(
-            new_owner, (new_owner.representative_name or new_owner.full_name).upper()
-        ),
-        "new_owner_authorization": party_organization(new_owner, authorization(new_owner)),
-        "new_owner_id_number": new_owner.id_number,
-        "new_owner_issue_date": new_owner.issue_date,
-        "new_owner_issue_place": new_owner.issue_place,
-        "new_owner_birth_date": new_owner.date_of_birth,
-        "new_owner_address": new_owner.address,
-        "new_owner_nationality": new_owner.nationality,
-        "subscriber_number": subscriber_numbers_joined,
-        "transfer_contract_basis": (
-            "- " + ("; ".join(transfer_basis) if transfer_basis else "." * 48)
-            + " (sau đây gọi chung là “Hợp đồng”)."
-        ),
-        "transfer_document_intro": (
-            f"Hôm nay, ngày {day} tháng {month} năm {year}, các bên thỏa thuận ký kết biên bản "
-            "chuyển quyền sử dụng dịch vụ thông tin di động mặt đất và thanh lý hợp đồng (“Biên bản”) như sau:"
-        ),
-        "transfer_agreement_intro": (
-            f"Bên A, Bên B và bên thứ ba (“Bên C”) đồng ý Bên A sẽ chuyển quyền sử dụng số thuê bao "
-            f"{dotted(data.subscriber_number, 16)} cho Bên C theo các thông tin như sau:"
-        ),
-        "transfer_effective_sentence": (
-            "Thời điểm thanh lý Hợp đồng và chuyển quyền sử dụng số thuê bao nói trên sẽ từ "
-            f"{_hour_only(data.transfer_time) or '……'} giờ, ngày {effective_day} tháng {effective_month} "
-            f"năm {effective_year} (“Thời điểm Chuyển quyền”)."
-        ),
-        "contract_number": data.contract_number,
-        "subscriber_code": data.subscriber_code or data.subscriber_number,
-        "sim_serial": data.sim_serial,
         "activation_date": data.activation_date,
-        "service_point_name": data.service_point_name,
-        "provider_representative": data.provider_representative,
-        # Same value as above, own key -- reserved for the Great Vibes
-        # signature-block cell specifically (see SIGNATURE_IMAGE_SLOTS),
-        # kept separate from the plain-info "provider_representative"
-        # mention above so an image can never land on the wrong one.
+        "customer_signature_name": customer.display_name().upper(),
         "provider_representative_signature": data.provider_representative,
-        "provider_position": data.provider_position,
-        "provider_phone": data.provider_phone,
-        "provider_email": data.provider_email,
-        "registration_time": data.registration_time,
-        "staff_name": data.staff_name.upper(),
-        "sim_customer_name": customer.display_name().upper(),
-        "sim_customer_birth_date": customer.date_of_birth,
-        "sim_customer_gender": customer.gender,
-        "sim_customer_nationality": customer.nationality,
-        "sim_customer_id_number": customer.id_number,
-        "sim_customer_issue_date": customer.issue_date,
-        "sim_customer_issue_place": customer.issue_place,
-        "sim_customer_address": customer.address,
-        # Unlike the other customer fields on this row, this is the shop's
-        # OWN contact number (data.shop_phone, already auto-defaulted for
-        # every mẫu from the saved company profile) -- not something the
-        # clerk types in per case. Giới tính/Email have no UI input at all
-        # and are left to render as their template's own blank line.
-        "sim_customer_phone": data.shop_phone,
-        "sim_customer_email": customer.email,
-        "sim_subscriber_number": subscriber_numbers_joined,
-        # For SIM replacement the shared subscriber editor's serial is the
-        # NEW card serial. This keeps that editor identical for all services.
-        "sim_new_serial": data.sim_serial,
-        "sim_current_serial": data.sim_current_serial,
-        "sim_reason_lost_mark": choice_mark(data.sim_replacement_reason == "Mất SIM"),
-        "sim_reason_damaged_mark": choice_mark(data.sim_replacement_reason == "Hỏng SIM"),
-        "sim_reason_other_mark": choice_mark(data.sim_replacement_reason == "Lý do khác"),
-        "sim_reason_other_value": data.sim_replacement_other_reason,
-        "sim_request_day": sim_request_day,
-        "sim_request_month": sim_request_month,
-        "sim_request_year": sim_request_year,
-        "sim_request_date_line": (
-            f"ngày {sim_request_day} tháng {sim_request_month} năm {sim_request_year}"
-        ),
-        "sim_document_date_line": (
-            f"ngày {sim_request_day} tháng {sim_request_month} năm {sim_request_year}"
-        ),
-        "frequent_phone_1": data.frequent_phone_1,
-        "frequent_phone_2": data.frequent_phone_2,
-        "frequent_phone_3": data.frequent_phone_3,
-        "frequent_phone_4": data.frequent_phone_4,
-        "frequent_phone_5": data.frequent_phone_5,
-        "recent_topup_value": data.recent_topup_value,
-        "recent_topup_method": data.recent_topup_method,
-        "remaining_validity": data.remaining_validity,
-        "account_balance": data.account_balance,
-        "last_changed_service": data.last_changed_service,
-        "prepaid_organization_name": organization(customer.organization_name.upper()),
-        "prepaid_headquarters_address": organization(customer.headquarters_address),
-        "prepaid_business_number": organization(customer.business_registration_number),
-        "prepaid_business_issue_place": organization(customer.business_registration_issue_place),
-        "prepaid_business_issue_date": organization(customer.business_registration_issue_date),
-        "prepaid_representative_name": organization(
-            prepaid_representative.full_name or customer.representative_name
-        ),
-        "prepaid_representative_position": organization(prepaid_representative.representative_position),
-        "prepaid_authorization": organization(authorization(prepaid_representative)),
-        "prepaid_organization_id_number": organization(prepaid_representative.id_number),
-        "prepaid_organization_issue_place": organization(prepaid_representative.issue_place),
-        "prepaid_organization_issue_date": organization(prepaid_representative.issue_date),
-        "prepaid_organization_birth_date": organization(prepaid_representative.date_of_birth),
-        "prepaid_organization_phone": organization(prepaid_representative.phone),
-        "prepaid_organization_email": organization(prepaid_representative.email),
-        "prepaid_organization_other_contact": organization(prepaid_representative.other_contact),
-        "prepaid_individual_name": individual(prepaid_individual.full_name.upper()),
-        "prepaid_individual_id_number": individual(prepaid_individual.id_number),
-        "prepaid_individual_issue_place": individual(prepaid_individual.issue_place),
-        "prepaid_individual_issue_date": individual(prepaid_individual.issue_date),
-        "prepaid_individual_birth_date": individual(prepaid_individual.date_of_birth),
-        "prepaid_individual_address": individual(prepaid_individual.address),
-        "prepaid_individual_phone": individual(prepaid_individual.phone),
-        "prepaid_individual_email": individual(prepaid_individual.email),
-        "prepaid_individual_other_contact": individual(prepaid_individual.other_contact),
-        "prepaid_individual_nationality": individual(
-            (
-                f"{CHECKED_BOX} Việt Nam    {EMPTY_BOX} Nước ngoài"
-                if prepaid_individual.nationality.casefold() == "việt nam"
-                else (
-                    f"{EMPTY_BOX} Việt Nam    {CHECKED_BOX} Nước ngoài: "
-                    f"{prepaid_individual.foreign_country or prepaid_individual.nationality}"
-                )
-            )
-            if prepaid_individual.nationality.strip()
-            else ""
-        ),
-        # Bên A's signature is the person actually taking over the
-        # subscription: the new owner in the structured (org->individual
-        # transfer) mode, or the customer signing for themselves in legacy
-        # mode (their own representative when they're an organization) --
-        # same org-vs-individual split as aftersale_requester_signature_name.
-        # Bên B stays provider_representative (Vietnamobile's own fixed
-        # signer); the two used to share one token, printing identically.
-        "prepaid_party_a_signature_name": (
-            new_owner.display_name() if prepaid_structured
-            else (customer.representative_name if is_organization else customer.display_name())
-        ).upper(),
-        # sim_change_form has no separate "ghi rõ họ tên" line for its
-        # operator/giao dịch viên yet (it used to just insert a signature
-        # image there) -- give it the same 2-line shape as every other
-        # signature in the app.
-        "sim_operator_signature_name": data.staff_name.upper(),
+        "subscriber_number": _subscriber_numbers_joined(data),
     }
-    for source_key, given_key in SIGNATURE_GIVEN_NAME_SOURCES:
-        context[given_key] = _given_name(context[source_key])
-    context["sim_operator_signature_given_name"] = _given_name(context["sim_operator_signature_name"])
+    context["customer_signature_given_name"] = _given_name(context["customer_signature_name"])
+    context["provider_representative_signature_given_name"] = _given_name(
+        context["provider_representative_signature"]
+    )
     return context
 
 
@@ -953,6 +653,52 @@ def _fill_beautiful_number_table(document: Document, data: ReportData) -> None:
         break
 
 
+def _fill_ownership_confirmation_table(document: Document, data: ReportData) -> None:
+    """Clone the "STT / Số thuê bao / Họ và tên / Số GTTT / Ngày cấp" row
+    per subscriber entry -- same clone-the-template-row approach as
+    _fill_beautiful_number_table, since it's the same "one physical row
+    per subscriber number" shape. Name/ID/issue date repeat the SAME
+    customer on every row (this form confirms one person's ownership of
+    possibly several numbers, not a different person per row)."""
+    customer = data.customer
+    rows = [
+        {
+            "subscriber_number": str(row.get("subscriber_number", "") or ""),
+            "name": customer.display_name().upper(),
+            "id_number": customer.id_number,
+            "issue_date": customer.issue_date,
+        }
+        for row in data.subscribers
+        if str(row.get("subscriber_number", "") or "").strip()
+    ] or [{
+        "subscriber_number": data.subscriber_number,
+        "name": customer.display_name().upper(),
+        "id_number": customer.id_number,
+        "issue_date": customer.issue_date,
+    }]
+    for table in document.tables:
+        if len(table.rows) < 2:
+            continue
+        header = " | ".join(cell.text for cell in table.rows[0].cells)
+        if "Số GTTT" not in header or "Họ và tên" not in header:
+            continue
+        template_row = table.rows[1]
+        for index, values in enumerate(rows):
+            if index == 0:
+                target_row = template_row
+            else:
+                new_tr = deepcopy(template_row._tr)
+                table._tbl.append(new_tr)
+                target_row = table.rows[-1]
+            cells = target_row.cells
+            _set_cell_text_preserving_style(cells[0], str(index + 1))
+            for cell, name in zip(
+                cells[1:], ("subscriber_number", "name", "id_number", "issue_date")
+            ):
+                _set_cell_text_preserving_style(cell, values.get(name, ""), name)
+        break
+
+
 def _fill_transfer_subscriber_table(document: Document, data: ReportData) -> None:
     """Clone the party table's "Số thuê bao" row for every subscriber entry.
 
@@ -1015,6 +761,7 @@ def _generate_docx(
     expected_placeholders: frozenset[str],
     *,
     allow_missing_placeholders: bool = False,
+    build_context,
 ) -> None:
     document = Document(str(template))
     template_paragraphs = list(_iter_paragraphs(document))
@@ -1043,7 +790,7 @@ def _generate_docx(
 
     _apply_signature_images(template_paragraphs, data)
 
-    context = _docx_context(data)
+    context = build_context(data)
     for paragraph in template_paragraphs:
         _replace_placeholders(paragraph, context)
         _style_docx_checkbox_symbols(paragraph)
@@ -1055,6 +802,8 @@ def _generate_docx(
         _fill_beautiful_number_table(document, data)
     elif data.document_type == DocumentType.TRANSFER:
         _fill_transfer_subscriber_table(document, data)
+    elif data.document_type == DocumentType.OWNERSHIP_CONFIRMATION:
+        _fill_ownership_confirmation_table(document, data)
 
     if data.document_type == DocumentType.TRANSFER and document.tables:
         table_size = 8.5 if (
@@ -1378,8 +1127,14 @@ def render_document(
     expected_placeholders: frozenset[str] = frozenset(),
     *,
     allow_missing_placeholders: bool = False,
+    build_context,
 ) -> None:
-    """Render one document; routing and lifecycle live in document modules."""
+    """Render one document; routing and lifecycle live in document modules.
+
+    `build_context` is always the calling BaseDocumentModule's own bound
+    build_context method (see base.py's generate()) -- required, not
+    defaulted, so a caller can never silently fall back to a "generic"
+    context builder that doesn't actually exist."""
     if output.suffix.casefold() == ".docx":
         _generate_docx(
             data,
@@ -1387,6 +1142,7 @@ def render_document(
             output,
             expected_placeholders,
             allow_missing_placeholders=allow_missing_placeholders,
+            build_context=build_context,
         )
     else:
         _generate_pdf(data, template, output)

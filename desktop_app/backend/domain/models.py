@@ -13,6 +13,7 @@ class DocumentType(str, Enum):
     BEAUTIFUL_NUMBER = "beautiful_number"
     PREPAID_CONTRACT = "prepaid_contract"
     SIM_CHANGE_FORM = "sim_change_form"
+    OWNERSHIP_CONFIRMATION = "ownership_confirmation"
 
 
 DOCUMENT_NAMES = {
@@ -29,6 +30,7 @@ DOCUMENT_NAMES = {
     DocumentType.SIM_CHANGE_FORM: (
         "Phiếu cung cấp và thay đổi dịch vụ thông tin di động mặt đất (trả trước)"
     ),
+    DocumentType.OWNERSHIP_CONFIRMATION: "Giấy cam kết – Dành cho Giao dịch xác nhận quyền",
 }
 
 DOCUMENT_SHORT_NAMES = {
@@ -37,6 +39,7 @@ DOCUMENT_SHORT_NAMES = {
     DocumentType.BEAUTIFUL_NUMBER: "Phụ lục cam kết số đẹp",
     DocumentType.PREPAID_CONTRACT: "Hợp đồng thuê bao trả trước",
     DocumentType.SIM_CHANGE_FORM: "Phiếu cung cấp & thay đổi dịch vụ trả trước",
+    DocumentType.OWNERSHIP_CONFIRMATION: "Cam kết xác nhận quyền",
 }
 
 
@@ -52,6 +55,12 @@ class ServiceTemplate(str, Enum):
     COMMITMENT_TRANSFER_INDIVIDUAL = "commitment_transfer_individual"  # Mẫu 3
     COMMITMENT_TRANSFER_ORG = "commitment_transfer_org"  # Mẫu 4
     SIM_REPLACEMENT = "sim_replacement"  # Mẫu 5
+    # Shop-specific (Quang Hà) variants -- Mẫu 2 and Mẫu 5 respectively,
+    # each with one extra document type added to the generated set. Every
+    # other dict below copies its base mẫu's own value verbatim; only
+    # SERVICE_TEMPLATE_DOCUMENTS differs.
+    QUANG_HA_STT = "quang_ha_stt"  # Mẫu 2 + OWNERSHIP_CONFIRMATION
+    QUANG_HA_SIM_CK = "quang_ha_sim_ck"  # Mẫu 5 + BEAUTIFUL_NUMBER
 
 
 SERVICE_TEMPLATE_NAMES = {
@@ -60,6 +69,8 @@ SERVICE_TEMPLATE_NAMES = {
     ServiceTemplate.COMMITMENT_TRANSFER_INDIVIDUAL: "Chuyển quyền cam kết (Cá nhân → Cá nhân)",
     ServiceTemplate.COMMITMENT_TRANSFER_ORG: "Chuyển quyền cam kết (Tổ chức → Cá nhân)",
     ServiceTemplate.SIM_REPLACEMENT: "Thay SIM",
+    ServiceTemplate.QUANG_HA_STT: "Ccq Quang Hà - STT",
+    ServiceTemplate.QUANG_HA_SIM_CK: "Ccq Quang Hà - Sim Ck",
 }
 
 # Which DocumentTypes get generated for each mẫu, in generation order.
@@ -81,6 +92,18 @@ SERVICE_TEMPLATE_DOCUMENTS: dict[ServiceTemplate, list[DocumentType]] = {
         DocumentType.BEAUTIFUL_NUMBER, DocumentType.PREPAID_CONTRACT,
     ],
     ServiceTemplate.SIM_REPLACEMENT: [DocumentType.AFTERSALE, DocumentType.SIM_CHANGE_FORM],
+    # Mẫu 2's own 4 documents, plus the new ownership-confirmation form.
+    ServiceTemplate.QUANG_HA_STT: [
+        DocumentType.TRANSFER, DocumentType.AFTERSALE,
+        DocumentType.BEAUTIFUL_NUMBER, DocumentType.PREPAID_CONTRACT,
+        DocumentType.OWNERSHIP_CONFIRMATION,
+    ],
+    # Mẫu 5's own 2 documents, plus the beautiful-number commitment (the
+    # same document type mẫu 1-4 already use, not new content).
+    ServiceTemplate.QUANG_HA_SIM_CK: [
+        DocumentType.AFTERSALE, DocumentType.SIM_CHANGE_FORM,
+        DocumentType.BEAUTIFUL_NUMBER,
+    ],
 }
 
 # "Tổ chức" mẫu (1 & 4) means the CUSTOMER (Bên A / current owner) is an
@@ -92,6 +115,8 @@ SERVICE_TEMPLATE_CUSTOMER_ENTITY_TYPE: dict[ServiceTemplate, str] = {
     ServiceTemplate.COMMITMENT_TRANSFER_INDIVIDUAL: "Cá nhân",
     ServiceTemplate.COMMITMENT_TRANSFER_ORG: "Tổ chức",
     ServiceTemplate.SIM_REPLACEMENT: "Cá nhân",
+    ServiceTemplate.QUANG_HA_STT: "Cá nhân",
+    ServiceTemplate.QUANG_HA_SIM_CK: "Cá nhân",
 }
 
 # Aftersale's own service_action, required by every mẫu that includes it.
@@ -101,6 +126,8 @@ SERVICE_TEMPLATE_SERVICE_ACTION: dict[ServiceTemplate, str] = {
     ServiceTemplate.COMMITMENT_TRANSFER_INDIVIDUAL: "Chuyển chủ quyền",
     ServiceTemplate.COMMITMENT_TRANSFER_ORG: "Chuyển chủ quyền",
     ServiceTemplate.SIM_REPLACEMENT: "Thay SIM",
+    ServiceTemplate.QUANG_HA_STT: "Chuyển chủ quyền",
+    ServiceTemplate.QUANG_HA_SIM_CK: "Thay SIM",
 }
 
 # Transfer's "hình thức thanh toán" line -- mẫu 1/2 are the trả trước
@@ -112,6 +139,8 @@ SERVICE_TEMPLATE_PAYMENT_METHOD: dict[ServiceTemplate, str] = {
     ServiceTemplate.COMMITMENT_TRANSFER_INDIVIDUAL: "Cam kết",
     ServiceTemplate.COMMITMENT_TRANSFER_ORG: "Cam kết",
     ServiceTemplate.SIM_REPLACEMENT: "Trả trước",
+    ServiceTemplate.QUANG_HA_STT: "Trả trước",
+    ServiceTemplate.QUANG_HA_SIM_CK: "Trả trước",
 }
 
 
@@ -343,7 +372,8 @@ class ReportData:
         scan-column scalar field, or at least one non-empty row in the mẫu
         workflow's `subscribers` list. Transfer/Aftersale's own
         required_paths() use this instead of requiring the scalar path
-        outright, since renderer.py's _docx_context() already falls back to
+        outright, since renderer.py's _subscriber_numbers_joined() (used by
+        every document module's build_context()) already falls back to
         the scalar whenever `subscribers` is empty/blank."""
         return bool(self.subscriber_number) or any(
             str(row.get("subscriber_number", "")).strip() for row in self.subscribers

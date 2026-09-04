@@ -451,7 +451,7 @@ def resolve_service_form_layout(template: ServiceTemplate) -> dict:
         ServiceTemplate.PREPAID_TRANSFER_ORG,
         ServiceTemplate.COMMITMENT_TRANSFER_ORG,
     }
-    sim_replacement = template == ServiceTemplate.SIM_REPLACEMENT
+    sim_replacement = template in {ServiceTemplate.SIM_REPLACEMENT, ServiceTemplate.QUANG_HA_SIM_CK}
     has_new_owner = not sim_replacement
     # All four ownership-transfer services now generate the prepaid
     # contract, so all four need the same provider/company sections.
@@ -470,7 +470,7 @@ def resolve_service_form_layout(template: ServiceTemplate) -> dict:
         ]
     else:
         current_sections = [{
-            "title": "Người yêu cầu" if template == ServiceTemplate.SIM_REPLACEMENT else "Chủ thuê bao hiện tại",
+            "title": "Người yêu cầu" if sim_replacement else "Chủ thuê bao hiện tại",
             "rows": _personal_service_rows("customer"),
         }]
 

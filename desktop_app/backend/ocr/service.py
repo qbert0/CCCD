@@ -87,6 +87,24 @@ def _same_name(left: str, right: str) -> bool:
     return first == second or SequenceMatcher(None, first, second).ratio() >= 0.88
 
 
+# Fields QR normally supplies on its own (parse_qr()'s own return keys,
+# desktop_app/backend/ocr/parser.py -- old_id_number deliberately excluded,
+# not everyone has one). Missing any of these after merging every scanned
+# image (front, and back too if it was read) means neither QR nor the
+# text-OCR fallback could recognize it -- worth calling out explicitly so
+# the user knows to type it in by hand, rather than only noticing later
+# at the generic required-field check.
+CORE_OCR_FIELDS = ("id_number", "full_name", "date_of_birth", "gender", "address", "issue_date")
+CORE_OCR_FIELD_LABELS = {
+    "id_number": "Số CCCD/CMND",
+    "full_name": "Họ và tên",
+    "date_of_birth": "Ngày sinh",
+    "gender": "Giới tính",
+    "address": "Địa chỉ",
+    "issue_date": "Ngày cấp",
+}
+
+
 def combine_file_results(
     file_results: list[OCRFileResult],
     warnings: list[str] | None = None,
@@ -134,6 +152,13 @@ def combine_file_results(
                 "Nguy cơ ảnh CCCD không hợp lệ: " + "; ".join(conflicts)
                 + ". Hãy kiểm tra lại trước khi tạo tài liệu."
             )
+
+    missing_core = [key for key in CORE_OCR_FIELDS if not merged.get(key)]
+    if missing_core:
+        labels = ", ".join(CORE_OCR_FIELD_LABELS[key] for key in missing_core)
+        combined_warnings.append(
+            f"Không nhận diện được: {labels}. Vui lòng tự điền tay các thông tin này."
+        )
 
     raw_parts = []
     for item in file_results:

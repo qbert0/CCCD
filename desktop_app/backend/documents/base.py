@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import stat
-from abc import ABC
+from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
 
@@ -25,6 +25,19 @@ class BaseDocumentModule(ABC):
     def __init__(self) -> None:
         if not self.template.exists():
             raise FileNotFoundError(f"Thiếu file mẫu: {self.template}")
+
+    @abstractmethod
+    def build_context(self, data: ReportData) -> dict[str, str]:
+        """Every `{{ }}` placeholder's value for this document type.
+
+        Every subclass merges renderer._common_context() (the handful of
+        fields genuinely shared across document types, verified by an
+        audit of every module's own `placeholders`) with its own
+        type-specific fields -- see sim_change_form/module.py for the
+        simplest example. A NEW document type must implement this too
+        (that's the point of it being abstract): copy that same shape,
+        don't add a case to some shared branch."""
+        raise NotImplementedError
 
     def check(self, data: ReportData) -> list[FieldError]:
         if data.document_type != self.document_type:
@@ -56,6 +69,7 @@ class BaseDocumentModule(ABC):
             output,
             self.placeholders,
             allow_missing_placeholders=self.allow_missing_placeholders,
+            build_context=self.build_context,
         )
         if preview:
             # A preview is only meant to be looked at — make it read-only so

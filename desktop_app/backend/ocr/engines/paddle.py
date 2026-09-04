@@ -114,6 +114,21 @@ class PaddleEngine(BaseOCREngine):
     def _load(self):
         if site.USER_SITE is None:
             site.USER_SITE = str(resource_root())
+        # torch must be imported before paddleocr, on Windows. paddlepaddle
+        # and torch each bundle their own build of Intel's OpenMP runtime
+        # (libiomp5md.dll); paddle's is missing two exports torch_cpu.dll
+        # needs (__kmpc_masked/__kmpc_end_masked -- confirmed by diffing the
+        # two DLLs' import/export tables directly). Windows resolves a
+        # dependency's bare-name imports (e.g. torch_cpu.dll importing
+        # "libiomp5md.dll") against whatever module of that name is already
+        # resident in the process before searching any directory, so
+        # whichever package's copy loads first "wins" process-wide -- with
+        # paddleocr imported first, torch's own later attempt to load
+        # shm.dll (which needs torch_cpu.dll, which needs those two
+        # exports) fails with "WinError 127: The specified procedure could
+        # not be found". Importing torch first makes its own (complete)
+        # copy the resident one instead; paddle is happy to reuse it.
+        import torch  # noqa: F401
         from paddleocr import PaddleOCR
         from vietocr.tool.config import Cfg
         from vietocr.tool.predictor import Predictor

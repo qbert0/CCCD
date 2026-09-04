@@ -19,7 +19,8 @@ CCCD.bridgeReady = new Promise((resolve) => {
     CCCD.bridge = {
       getInitialState: () => call("get_initial_state"),
       chooseSourceFolder: () => call("choose_source_folder"),
-      submitFolderImages: (target, paths) => call("submit_folder_images", target, JSON.stringify(paths)),
+      submitFolderImages: (target, paths, append = false) =>
+        call("submit_folder_images", target, JSON.stringify(paths), append),
       getCompanyProfile: () => call("get_company_profile"),
       getCompanyProfileLayout: () => call("get_company_profile_layout"),
       saveCompanyProfile: (personObj) => call("save_company_profile", JSON.stringify(personObj)),
