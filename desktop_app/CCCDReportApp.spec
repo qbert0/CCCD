@@ -19,6 +19,10 @@ datas = [
         "desktop_app/backend/documents/aftersale",
     ),
     (
+        str(project_dir / "desktop_app/backend/documents/aftersale/00_MAU_CAM_KET_SAU_BAN_HANG_ap_dung_cho_thay_sim.docx"),
+        "desktop_app/backend/documents/aftersale",
+    ),
+    (
         str(project_dir / "desktop_app/backend/documents/beautiful_number/00_MAU_PHU_LUC_CAM_KET_SO_DEP_editable.docx"),
         "desktop_app/backend/documents/beautiful_number",
     ),
@@ -29,6 +33,22 @@ datas = [
     (
         str(project_dir / "desktop_app/backend/documents/sim_change_form/00_MAU_PHIEU_THAY_DOI_DICH_VU_TRA_TRUOC.docx"),
         "desktop_app/backend/documents/sim_change_form",
+    ),
+    (
+        str(project_dir / "desktop_app/backend/documents/ownership_confirmation/00_MAU_GIAY_CAM_KET_XAC_NHAN_QUYEN.docx"),
+        "desktop_app/backend/documents/ownership_confirmation",
+    ),
+    (
+        str(project_dir / "desktop_app/backend/documents/service_registration/00_MAU_PHIEU_DANG_KY_DICH_VU.docx"),
+        "desktop_app/backend/documents/service_registration",
+    ),
+    (
+        str(project_dir / "desktop_app/backend/documents/transfer/fig1.jpg"),
+        "desktop_app/backend/documents/transfer",
+    ),
+    (
+        str(project_dir / "desktop_app/backend/documents/transfer/fig2.jpg"),
+        "desktop_app/backend/documents/transfer",
     ),
     (str(project_dir / "desktop_app/data/source/samples"), "desktop_app/data/source/samples"),
     (str(project_dir / "desktop_app/data/source/signatures"), "desktop_app/data/source/signatures"),

@@ -1,4 +1,6 @@
-from desktop_app.backend.domain.models import DocumentType, ReportData
+from pathlib import Path
+
+from desktop_app.backend.domain.models import DocumentType, ReportData, ServiceTemplate
 from desktop_app.backend.paths import resource_path
 
 from ..base import BaseDocumentModule
@@ -10,6 +12,11 @@ class AftersaleDocumentModule(BaseDocumentModule):
     document_type = DocumentType.AFTERSALE
     suffix = ".docx"
     schema = AftersaleSchema
+    # Two real, separately-authored templates share this one field contract
+    # (see _resolve_template below) -- the sim-replacement one just doesn't
+    # print a document date line, so allow_missing_placeholders covers that
+    # gap without needing a second, narrower placeholder set.
+    allow_missing_placeholders = True
     placeholders = frozenset({
         "aftersale_day", "aftersale_month", "aftersale_year",
         "aftersale_customer_name", "aftersale_customer_id_number",
@@ -26,9 +33,32 @@ class AftersaleDocumentModule(BaseDocumentModule):
         "aftersale_new_owner_signature_name", "aftersale_new_owner_signature_given_name",
         "aftersale_clerk_signature_name", "aftersale_clerk_signature_given_name",
     })
+    # The transfer services' own template (Chuyển chủ quyền cam kết/trả
+    # trước, both cá nhân and tổ chức -- 4 services in total). Kept as
+    # `template` since that's this module's required single-template
+    # contract; _resolve_template below picks the other one instead for
+    # the 5th service, Thay SIM.
     template = resource_path(
         "desktop_app", "backend", "documents", "aftersale", "00_MAU_CAM_KET_SAU_BAN_HANG.docx"
     )
+    sim_replacement_template = resource_path(
+        "desktop_app", "backend", "documents", "aftersale",
+        "00_MAU_CAM_KET_SAU_BAN_HANG_ap_dung_cho_thay_sim.docx",
+    )
+
+    def _all_templates(self) -> tuple[Path, ...]:
+        return (self.template, self.sim_replacement_template)
+
+    def _resolve_template(self, data: ReportData) -> Path:
+        # QUANG_HA_SIM_CK is Mẫu 5's own "Thay SIM" shape plus one extra
+        # document (see SERVICE_TEMPLATE_DOCUMENTS) -- same single-party,
+        # service_action="Thay SIM" case SIM_REPLACEMENT already is, so it
+        # gets the same sim-replacement-specific aftersale template.
+        if data.service_template in (
+            ServiceTemplate.SIM_REPLACEMENT.value, ServiceTemplate.QUANG_HA_SIM_CK.value,
+        ):
+            return self.sim_replacement_template
+        return self.template
 
     def build_context(self, data: ReportData) -> dict[str, str]:
         """Values copied verbatim from _docx_context()'s own aftersale_*/

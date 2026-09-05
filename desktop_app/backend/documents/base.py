@@ -23,8 +23,22 @@ class BaseDocumentModule(ABC):
     allow_missing_placeholders = False
 
     def __init__(self) -> None:
-        if not self.template.exists():
-            raise FileNotFoundError(f"Thiếu file mẫu: {self.template}")
+        for template in self._all_templates():
+            if not template.exists():
+                raise FileNotFoundError(f"Thiếu file mẫu: {template}")
+
+    def _all_templates(self) -> tuple[Path, ...]:
+        """Every template file this module might render, checked up front at
+        construction time so a missing file fails fast. A module needing more
+        than one template (see AftersaleDocumentModule) overrides this
+        alongside _resolve_template."""
+        return (self.template,)
+
+    def _resolve_template(self, data: ReportData) -> Path:
+        """Which template file to render for this specific `data`. Defaults
+        to the module's single `template`; override alongside
+        _all_templates for a module that picks between several."""
+        return self.template
 
     @abstractmethod
     def build_context(self, data: ReportData) -> dict[str, str]:
@@ -65,7 +79,7 @@ class BaseDocumentModule(ABC):
         output = self._unique_output(output_dir, stem, self.suffix)
         render_document(
             data,
-            self.template,
+            self._resolve_template(data),
             output,
             self.placeholders,
             allow_missing_placeholders=self.allow_missing_placeholders,

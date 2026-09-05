@@ -300,6 +300,28 @@ class DocumentTest(unittest.TestCase):
             # the (unrelated) signature block.
             self.assertEqual(len(Document(str(output)).tables), 1)
 
+    def test_aftersale_uses_a_dedicated_template_for_sim_replacement_services(self):
+        # SIM_REPLACEMENT (and QUANG_HA_SIM_CK, its Quang Hà variant) use a
+        # separately-authored aftersale template with no document-date line
+        # -- see AftersaleDocumentModule._resolve_template. Every other
+        # service keeps the original 4-service template.
+        from desktop_app.backend.domain.models import ServiceTemplate
+
+        for template, expect_dated_line in (
+            (ServiceTemplate.SIM_REPLACEMENT, False),
+            (ServiceTemplate.QUANG_HA_SIM_CK, False),
+            (ServiceTemplate.PREPAID_TRANSFER_INDIVIDUAL, True),
+        ):
+            with self.subTest(template=template), tempfile.TemporaryDirectory() as folder:
+                data = self.report(DocumentType.AFTERSALE)
+                data.service_template = template.value
+                data.service_action = "Thay SIM"
+                output = self.registry.for_data(data).generate(data, Path(folder))
+                text = docx_text(output)
+                self.assertIn("GIẤY CAM KẾT", text)
+                self.assertNotIn("{{", text)
+                self.assertEqual("Ngày 11 tháng 08 năm 2026" in text, expect_dated_line)
+
     def test_aftersale_identity_block_uses_the_actual_organization_requester(self):
         # The form labels this block "Khách hàng/Người yêu cầu". An
         # organization transfer therefore prints the old owner's company,
