@@ -64,7 +64,7 @@ from desktop_app.backend.domain.models import (
     ServiceTemplate,
 )
 from desktop_app.backend.ocr import CardSide, OCRFileResult, OCRService, combine_file_results
-from desktop_app.backend.paths import default_output_dir
+from desktop_app.backend.paths import default_output_dir, resource_path
 from desktop_app.backend.validation.rules import (
     common_errors,
     organization_information_required,
@@ -130,6 +130,17 @@ def _needs_new_owner(document_type: DocumentType, service_action: str) -> bool:
 # than silently queued -- an unbounded number of concurrent PaddleOCR-class
 # workloads would just thrash the machine instead of finishing faster.
 MAX_CONCURRENT_GENERATION_JOBS = 10
+
+# Chuyển quyền trả trước (Tổ chức → Cá nhân) is the only mẫu that needs these
+# 2 extra pages appended after its generated documents -- the shop's own
+# business registration certificate (proving the signing representative's
+# authority), by explicit request. Listed page-order (fig2 then fig1), not
+# filename order: fig2.jpg is the certificate's own page 1 (company/owner
+# info), fig1.jpg its page 2 (the representative's personal details).
+_PREPAID_TRANSFER_ORG_EXTRA_PAGES = (
+    resource_path("desktop_app", "backend", "documents", "transfer", "fig2.jpg"),
+    resource_path("desktop_app", "backend", "documents", "transfer", "fig1.jpg"),
+)
 
 
 class DocumentGenerationWorker(QThread):
@@ -205,6 +216,11 @@ class DocumentGenerationWorker(QThread):
                 staged_outputs = convert_docx_batch_to_images(
                     docx_outputs, staged_images_dir, filename_for=name_page,
                 )
+                if self.template == ServiceTemplate.PREPAID_TRANSFER_ORG:
+                    for extra_page in _PREPAID_TRANSFER_ORG_EXTRA_PAGES:
+                        target = staged_images_dir / name_page(extra_page, 1)
+                        shutil.copy2(extra_page, target)
+                        staged_outputs.append(target)
 
                 # Commit only after generation and conversion have both
                 # succeeded. Inputs 1-6 are refreshed when exporting to a

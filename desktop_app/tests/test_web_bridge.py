@@ -861,6 +861,113 @@ class WebBridgeTest(unittest.TestCase):
             self.assertFalse(result["ok"])
             self.assertTrue(any(e["path"] == "customer.full_name" for e in result["errors"]))
 
+    def test_prepaid_transfer_org_appends_the_business_certificate_pages(self):
+        # PREPAID_TRANSFER_ORG (Mẫu 1) is the only mẫu that appends 2 extra
+        # pages after its own generated documents -- the shop's own business
+        # registration certificate, proving the signing representative's
+        # authority (fig2.jpg is the certificate's own page 1, fig1.jpg its
+        # page 2 -- see _PREPAID_TRANSFER_ORG_EXTRA_PAGES).
+        import tempfile
+
+        from desktop_app.backend.paths import resource_path
+
+        self.bridge.company_profile = PersonData(
+            entity_type="Tổ chức", organization_name="CÔNG TY CHỦ CŨ",
+            business_registration_number="0101234567",
+            business_registration_issue_date="01/01/2020",
+            business_registration_issue_place="Sở Tài chính Hà Nội",
+            headquarters_address="1 Xã Đàn",
+        )
+        self.bridge.representative_profile = PersonData(
+            full_name="NGƯỜI ĐẠI DIỆN MẶC ĐỊNH", id_number="001090001234",
+            issue_date="01/01/2022", issue_place="Cục Cảnh sát",
+            date_of_birth="01/01/1990", nationality="Việt Nam", address="Hà Nội",
+            representative_position="Giám đốc",
+        )
+        defaults = self.bridge._default_report_dict()
+        response = json.loads(self.bridge.on_service_template_changed(json.dumps({
+            "previous_service_template": "", "new_service_template": "prepaid_transfer_org",
+            "state": {**defaults, "document_type": ""},
+        })))
+        state = {**defaults, **response["state_patch"]}
+        state["new_owner"] = {
+            **state["new_owner"], "full_name": "CHỦ MỚI TRONG ẢNH", "id_number": "001099999999",
+            "issue_date": "01/01/2021", "issue_place": "Cục Cảnh sát", "date_of_birth": "01/01/1999",
+            "nationality": "Việt Nam", "address": "Hà Nội",
+        }
+        state["subscribers"] = [{"subscriber_number": "0925123456", "monthly_fee": "", "activation_date": "19/08/2026", "sim_serial": "8984041234567890001", "commitment_note": ""}]
+        state["service_point_address"] = state.get("service_point_address") or "1 Xã Đàn"
+        state["service_point_phone"] = "0901234567"
+
+        def fake_convert(docx_paths, output_dir, dpi=150, filename_for=None):
+            del dpi
+            output_dir.mkdir(parents=True, exist_ok=True)
+            outputs = []
+            for docx_path in docx_paths:
+                target = output_dir / filename_for(docx_path, 1)
+                target.write_bytes(b"jpeg page")
+                outputs.append(target)
+            return outputs
+
+        with tempfile.TemporaryDirectory() as folder, patch(
+            "desktop_app.frontend.web_bridge.convert_docx_batch_to_images",
+            side_effect=fake_convert,
+        ):
+            for number in (1, 2, 3):
+                Path(folder, f"{number}.jpg").write_bytes(b"source")
+            self.bridge._last_source_dir = folder
+            result = self._run_generation("prepaid_transfer_org", state, folder)
+            self.assertTrue(result["ok"], result)
+            # 4 documents (transfer/aftersale/beautiful_number/prepaid_contract)
+            # + the 2 appended certificate pages.
+            self.assertEqual(len(result["paths"]), 6)
+            extra_page_2, extra_page_1 = result["paths"][-2:]
+            self.assertEqual(
+                Path(extra_page_2).read_bytes(),
+                resource_path("desktop_app", "backend", "documents", "transfer", "fig2.jpg").read_bytes(),
+            )
+            self.assertEqual(
+                Path(extra_page_1).read_bytes(),
+                resource_path("desktop_app", "backend", "documents", "transfer", "fig1.jpg").read_bytes(),
+            )
+
+    def test_only_prepaid_transfer_org_gets_the_business_certificate_pages(self):
+        import tempfile
+
+        defaults = self.bridge._default_report_dict()
+        response = json.loads(self.bridge.on_service_template_changed(json.dumps({
+            "previous_service_template": "", "new_service_template": "sim_replacement",
+            "state": {**defaults, "document_type": ""},
+        })))
+        state = {**defaults, **response["state_patch"]}
+        state["customer"] = {
+            **state["customer"], "full_name": "NGUYỄN VĂN AN", "id_number": "001099999999",
+            "issue_date": "01/01/2021", "issue_place": "Cục Cảnh sát QLHC về TTXH",
+            "address": "1 Xã Đàn, Hà Nội",
+        }
+        state["subscribers"] = [{"subscriber_number": "0925123456", "monthly_fee": "", "activation_date": "19/08/2026", "sim_serial": "8984041234567890001", "commitment_note": ""}]
+
+        def fake_convert(docx_paths, output_dir, dpi=150, filename_for=None):
+            del dpi
+            output_dir.mkdir(parents=True, exist_ok=True)
+            outputs = []
+            for docx_path in docx_paths:
+                target = output_dir / filename_for(docx_path, 1)
+                target.write_bytes(b"jpeg page")
+                outputs.append(target)
+            return outputs
+
+        with tempfile.TemporaryDirectory() as folder, patch(
+            "desktop_app.frontend.web_bridge.convert_docx_batch_to_images",
+            side_effect=fake_convert,
+        ):
+            for number in (1, 2, 3):
+                Path(folder, f"{number}.jpg").write_bytes(b"source")
+            self.bridge._last_source_dir = folder
+            result = self._run_generation("sim_replacement", state, folder)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(len(result["paths"]), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
