@@ -17,6 +17,15 @@ UI-element/
 # unlike the small bundled PaddleOCR det/rec/cls models — fetched once by
 # desktop_app/install.sh into this same path instead of being committed.
 runtime_models/vietocr/vgg_transformer.pth
+
+# Windows-only docx->PDF->image toolchain (LibreOffice ~1.5GB, poppler
+# ~25MB) — same reasoning as the VietOCR weights above, several GitHub
+# blob-size multiples over the limit. desktop_app/install.sh fetches the
+# official LibreOffice MSI and extracts it with `msiexec /a` (an
+# administrative install -- unpacks files without registering anything
+# system-wide) instead of a real install, and downloads poppler-windows'
+# prebuilt binaries, so this directory is fully reproducible from source.
+runtime_tools/
 desktop_app/data/output/*
 !desktop_app/data/output/.gitkeep
 

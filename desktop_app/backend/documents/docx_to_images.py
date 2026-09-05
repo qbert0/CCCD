@@ -2,17 +2,62 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Callable, Iterable
+
+from desktop_app.backend.paths import resource_path
 
 
 class ConversionToolsMissing(RuntimeError):
     pass
 
 
+# subprocess.run() on Windows spawns a new visible console window for a
+# console-subsystem child (soffice.exe/pdftoppm.exe both are) whenever the
+# parent process itself has none -- true here, since the app's own EXE is
+# built with console=False (see CCCDReportApp.spec's EXE(...)). Without this
+# flag, every docx->image conversion flashed a black cmd window on screen.
+_NO_WINDOW_FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+
+# Windows-only bundled copies (see CCCDReportApp.spec's datas list, fetched
+# into runtime_tools/win/ by desktop_app/install.sh) so a packaged build
+# never depends on the end user's own machine having LibreOffice/poppler
+# installed. Only used in a frozen build -- running from source still uses
+# whatever's on the developer's own PATH, same as before.
+_BUNDLED_TOOL_PATHS = {
+    "soffice": ("runtime_tools", "win", "libreoffice", "program", "soffice.exe"),
+    "pdftoppm": ("runtime_tools", "win", "poppler", "bin", "pdftoppm.exe"),
+}
+
+
+def _bundled_tool_path(name: str) -> Path | None:
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return None
+    parts = _BUNDLED_TOOL_PATHS.get(name)
+    if not parts:
+        return None
+    path = resource_path(*parts)
+    return path if path.is_file() else None
+
+
+def _tool_path(name: str) -> str:
+    """Resolve a tool to invoke via subprocess: the bundled copy if this is
+    a frozen Windows build and it's actually present, otherwise whatever
+    `name` resolves to on PATH (or just `name` itself, unresolved --
+    _require_tools() has already turned that case into a clear error by the
+    time any of this runs)."""
+    bundled = _bundled_tool_path(name)
+    return str(bundled) if bundled else (shutil.which(name) or name)
+
+
 def _require_tools() -> None:
-    missing = [name for name in ("soffice", "pdftoppm") if not shutil.which(name)]
+    missing = [
+        name for name in ("soffice", "pdftoppm")
+        if not _bundled_tool_path(name) and not shutil.which(name)
+    ]
     if missing:
         raise ConversionToolsMissing(
             "Cần cài LibreOffice (lệnh 'soffice') và poppler-utils (lệnh 'pdftoppm') "
@@ -33,8 +78,8 @@ def _convert_pdfs_to_images(
         prefix = tmp_dir / docx_path.stem
         try:
             subprocess.run(
-                ["pdftoppm", "-jpeg", "-r", str(dpi), str(pdf_path), str(prefix)],
-                check=True, capture_output=True, timeout=120,
+                [_tool_path("pdftoppm"), "-jpeg", "-r", str(dpi), str(pdf_path), str(prefix)],
+                check=True, capture_output=True, timeout=120, creationflags=_NO_WINDOW_FLAGS,
             )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(f"Xuất ảnh cho {docx_path.name} quá thời gian chờ") from exc
@@ -85,12 +130,12 @@ def convert_docx_batch_to_images(
             try:
                 completed = subprocess.run(
                     [
-                        "soffice", "--headless", "--norestore", "--nodefault", "--nolockcheck",
+                        _tool_path("soffice"), "--headless", "--norestore", "--nodefault", "--nolockcheck",
                         f"-env:UserInstallation={profile_dir.resolve().as_uri()}",
                         "--convert-to", "pdf:writer_pdf_Export", "--outdir", str(tmp_dir),
                         *[str(path) for path in paths],
                     ],
-                    check=True, capture_output=True, timeout=180,
+                    check=True, capture_output=True, timeout=180, creationflags=_NO_WINDOW_FLAGS,
                 )
                 missing = [path.name for path in paths if not (tmp_dir / f"{path.stem}.pdf").exists()]
                 if not missing:
@@ -118,11 +163,13 @@ def convert_docx_to_images(
     pages by continuing a shop-supplied 1.jpg..6.jpg input sequence, not by
     the source docx's own name.
 
-    Not bundled into the packaged app -- LibreOffice/poppler would add
-    500MB-1GB+ to every installer for a feature that only needs to run on
-    the shop's own machine, which realistically already has an office
-    suite. Raises ConversionToolsMissing with a clear message when either
-    tool isn't found, instead of failing silently or half-way through.
+    On a Windows frozen build, LibreOffice/poppler are bundled (see
+    CCCDReportApp.spec + _bundled_tool_path above) despite adding ~1.5GB to
+    the installer -- an end user's machine can't be assumed to already have
+    either tool. Running from source (any platform) still relies on
+    whatever's on the developer's own PATH. Raises ConversionToolsMissing
+    with a clear message when neither the bundled copy nor PATH has the
+    tool, instead of failing silently or half-way through.
 
     Uses an isolated, disposable LibreOffice profile
     (-env:UserInstallation) for the headless conversion so it can never

@@ -1019,37 +1019,39 @@ dialog.modal::backdrop {
 }
 
 /* ===== Default settings workspace ===== */
-/* The app window opens at 1400x900 (see WebHomePage.resize in
-   web_home_page.py) and the shop rarely resizes it much smaller in
-   practice, so this dialog gets one FIXED height computed against that
-   real size (not a vh percentage, which keeps recalculating relative to
-   whatever the current viewport happens to be and made the earlier fix
-   fragile) -- min(720px, 90vh) only shrinks below 720px on a viewport
-   genuinely smaller than 800px tall. The dialog is a flex column so
-   .settings-layout (the only variable-height part) always gets exactly
-   "whatever's left" after the fixed header/footer chrome, however tall
-   those turn out to be, and scrolls internally for anything past that --
-   the popup's outer size never changes between tabs, short or long. */
-/* [open] matters here, not just as a specificity nicety: an unqualified
-   `display: flex` is an AUTHOR style, which always beats the UA
-   stylesheet's `dialog:not([open]) { display: none }` regardless of
-   specificity -- so without [open], a closed dialog stayed visually
-   rendered (its own display:flex overriding the native "hidden when
-   closed" rule) as an empty header+footer shell with no backdrop, exactly
-   what "đóng xong vẫn còn thấy form" was actually seeing. Closing WAS
-   working (open=false, .settings-layout's content correctly vanished via
-   its own v-if once @close nulled the data) -- the dialog visually
-   staying on screen was the only real bug. */
-dialog.modal--settings[open] {
-  display: flex;
-  flex-direction: column;
+/* This dialog previously set `height`/`display:flex` directly on the
+   <dialog> element itself (gated by an [open] selector to avoid fighting
+   the UA's `dialog:not([open]) { display:none }` rule). That's correct
+   CSS and renders fine in a modern browser, but not reliably inside
+   QtWebEngine 5.15's bundled Chromium (~87): a <dialog> shown via
+   showModal() runs in the browser's "top layer", and that engine's box
+   model for it doesn't consistently honor an author-set flex/height the
+   way an ordinary block element does -- confirmed on a real Windows
+   build, not a hypothesis (this exact pattern also broke the simpler
+   two-tab profile dialog earlier in this project; switching *that* one
+   off the same pattern fixed it there too).
+   Fix: give the <dialog> itself no special sizing at all (just width) and
+   let it shrink-wrap around one plain, ordinary <div class="settings-shell">
+   child -- flex-direction:column + a fixed height on a normal block
+   element is unremarkable, well-supported CSS, unlike doing the same
+   directly on <dialog>. */
+dialog.modal--settings {
   width: min(1080px, 94vw);
-  height: min(720px, 90vh);
-  /* The date picker is a fixed child of the top-layer dialog and must be
-     allowed to extend beyond the form's scrolling content. */
-  overflow: visible;
   background: var(--color-surface-card);
   border-radius: var(--radius-xl);
+}
+.settings-shell {
+  display: flex;
+  flex-direction: column;
+  /* Fixed height computed against the app's normal 1400x900 window (see
+     WebHomePage.resize in web_home_page.py), not a vh percentage that
+     recalculates against whatever the viewport happens to be -- only
+     shrinks below 720px on a genuinely smaller viewport. .settings-layout
+     (the only variable-height part below) always gets exactly "whatever's
+     left" after the fixed header/footer chrome and scrolls internally for
+     anything past that -- the popup's outer size never changes between
+     tabs, short or long. */
+  height: min(720px, 90vh);
 }
 .settings-header {
   display: flex;

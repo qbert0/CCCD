@@ -43,6 +43,18 @@ datas = [
     # following imports, since nothing in Python ever `import`s them.
     (str(project_dir / "desktop_app/frontend/web"), "desktop_app/frontend/web"),
 ]
+if sys.platform == "win32":
+    # docx->PDF->image conversion (desktop_app/backend/documents/
+    # docx_to_images.py) shells out to LibreOffice's `soffice` and
+    # poppler's `pdftoppm`. Bundled here (fetched by desktop_app/install.sh
+    # into runtime_tools/win/, too large to commit -- see .gitignore) so
+    # end users never install either tool themselves; docx_to_images.py
+    # resolves these bundled paths itself when frozen instead of relying
+    # on PATH the way the dev-machine invocation does.
+    datas += [
+        (str(project_dir / "runtime_tools/win/libreoffice"), "runtime_tools/win/libreoffice"),
+        (str(project_dir / "runtime_tools/win/poppler"), "runtime_tools/win/poppler"),
+    ]
 datas += collect_data_files("Cython", includes=["Utility/*"])
 datas += copy_metadata("imageio")
 binaries = []

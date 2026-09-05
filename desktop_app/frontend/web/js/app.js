@@ -848,6 +848,7 @@
 
       <dialog class="modal modal--settings" ref="profileDialog"
         @close="profile = null; representative = null; representative2 = null; operatorProfiles = null; providerSignature = null; documentSetSettings = null; calendar = null">
+      <div class="settings-shell">
         <div class="settings-header">
           <div>
             <div class="eyebrow">Cấu hình dùng lại</div>
@@ -999,6 +1000,7 @@
             @click="saveDocumentSetSettings">Lưu tài liệu theo dịch vụ</button>
           <button class="btn" type="button" @click="$refs.profileDialog.close()">Đóng</button>
         </div>
+      </div>
         <calendar-popover v-if="calendar && calendarInProfile" :anchor-rect="calendar.anchorRect"
           :value="calendarValue" @pick="pickDate" @close="calendar = null" />
       </dialog>
