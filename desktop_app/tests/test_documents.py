@@ -301,15 +301,17 @@ class DocumentTest(unittest.TestCase):
             self.assertEqual(len(Document(str(output)).tables), 1)
 
     def test_aftersale_uses_a_dedicated_template_for_sim_replacement_services(self):
-        # SIM_REPLACEMENT (and QUANG_HA_SIM_CK, its Quang Hà variant) use a
-        # separately-authored aftersale template with no document-date line
-        # -- see AftersaleDocumentModule._resolve_template. Every other
-        # service keeps the original 4-service template.
+        # SIM_REPLACEMENT and both Quang Hà services (QUANG_HA_SIM_CK,
+        # QUANG_HA_STT) use a separately-authored aftersale template with
+        # no document-date line -- see
+        # AftersaleDocumentModule._resolve_template. Every other service
+        # keeps the original 4-service template.
         from desktop_app.backend.domain.models import ServiceTemplate
 
         for template, expect_dated_line in (
             (ServiceTemplate.SIM_REPLACEMENT, False),
             (ServiceTemplate.QUANG_HA_SIM_CK, False),
+            (ServiceTemplate.QUANG_HA_STT, False),
             (ServiceTemplate.PREPAID_TRANSFER_INDIVIDUAL, True),
         ):
             with self.subTest(template=template), tempfile.TemporaryDirectory() as folder:

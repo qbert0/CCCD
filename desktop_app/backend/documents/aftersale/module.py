@@ -50,12 +50,14 @@ class AftersaleDocumentModule(BaseDocumentModule):
         return (self.template, self.sim_replacement_template)
 
     def _resolve_template(self, data: ReportData) -> Path:
-        # QUANG_HA_SIM_CK is Mẫu 5's own "Thay SIM" shape plus one extra
-        # document (see SERVICE_TEMPLATE_DOCUMENTS) -- same single-party,
-        # service_action="Thay SIM" case SIM_REPLACEMENT already is, so it
-        # gets the same sim-replacement-specific aftersale template.
+        # Both Quang Hà services (STT and SIM_CK) use the sim-replacement-
+        # specific aftersale template -- per direct instruction, not just
+        # QUANG_HA_SIM_CK's own "Thay SIM" shape (which already matched
+        # SIM_REPLACEMENT's own case below).
         if data.service_template in (
-            ServiceTemplate.SIM_REPLACEMENT.value, ServiceTemplate.QUANG_HA_SIM_CK.value,
+            ServiceTemplate.SIM_REPLACEMENT.value,
+            ServiceTemplate.QUANG_HA_SIM_CK.value,
+            ServiceTemplate.QUANG_HA_STT.value,
         ):
             return self.sim_replacement_template
         return self.template
